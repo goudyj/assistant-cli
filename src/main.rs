@@ -11,10 +11,7 @@ use std::io;
 async fn main() {
     let mut rl = Reedline::create();
     let prompt = DefaultPrompt::default();
-    print_colored_message(
-        "Commands: /issue <desc>, /ok, /quit, or type feedback to refine the current issue.\n",
-        Color::Blue,
-    );
+    print_colored_message("Commands: /issue <desc>, /ok, /quit\n", Color::DarkMagenta);
 
     let mut session: Option<IssueSession> = None;
 
@@ -37,7 +34,7 @@ async fn main() {
                 "/quit" | "/exit" => break,
                 "/issue" => {
                     if rest.is_empty() {
-                        print_colored_message("Usage: /issue <description>\n", Color::Yellow);
+                        print_colored_message("Usage: /issue <description>\n", Color::DarkMagenta);
                         continue;
                     }
                     match issues::generate_issue(rest).await {
@@ -45,6 +42,10 @@ async fn main() {
                             session = Some(IssueSession { issue, messages });
                             if let Some(s) = &session {
                                 print_issue(&s.issue);
+                                print_colored_message(
+                                    "Give a feedback to adapt the issue or write /ok to create it.",
+                                    Color::DarkMagenta,
+                                );
                             }
                         }
                         Err(err) => eprintln!("Error generating issue {err:#?}"),
@@ -53,17 +54,24 @@ async fn main() {
                 "/ok" => {
                     print_colored_message(
                         "Issue creation is not implemented yet.\n",
-                        Color::Yellow,
+                        Color::DarkMagenta,
                     );
                     session = None;
                 }
                 "/help" => {
-                    print_colored_message(
-                        "Commands: /issue <desc>, /ok, /quit. Type feedback to refine the current issue.\n",
-                        Color::Blue,
-                    );
+                    if let Some(_) = session.as_ref() {
+                        print_colored_message(
+                            "Give a feedback to adapt the issue or write /ok to create it.\n",
+                            Color::Blue,
+                        );
+                    } else {
+                        print_colored_message(
+                            "Commands: /issue <desc>, /ok, /quit.\n",
+                            Color::DarkMagenta,
+                        );
+                    }
                 }
-                _ => print_colored_message("Unknown command.\n", Color::Yellow),
+                _ => print_colored_message("Unknown command.\n", Color::DarkMagenta),
             }
             continue;
         }
@@ -74,10 +82,7 @@ async fn main() {
                 session = None;
             }
         } else {
-            print_colored_message(
-                "No active issue. Start one with /issue <description>.\n",
-                Color::Yellow,
-            );
+            print_colored_message("Write /help for commands.", Color::DarkMagenta);
         }
     }
 }
@@ -102,7 +107,7 @@ fn print_issue(issue: &IssueContent) {
             issue.title,
             issue.body,
         ),
-        Color::Green,
+        Color::DarkYellow,
     );
 }
 
