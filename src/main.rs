@@ -125,7 +125,7 @@ async fn handle_feedback(
         content: feedback.to_string(),
     });
 
-    let response = llm::generate_response(&mut session.messages).await?;
+    let response = llm::generate_response(&mut session.messages, &llm::default_endpoint()).await?;
     let updated_issue: IssueContent = serde_json::from_str(&response.message.content)?;
     session.issue = updated_issue;
 

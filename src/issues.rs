@@ -95,6 +95,13 @@ Now wait for the user input and respond with a single JSON object following the 
 pub async fn generate_issue(
     description: &str,
 ) -> Result<(IssueContent, Vec<llm::Message>), Box<dyn Error>> {
+    generate_issue_with_endpoint(description, &llm::default_endpoint()).await
+}
+
+pub async fn generate_issue_with_endpoint(
+    description: &str,
+    endpoint: &str,
+) -> Result<(IssueContent, Vec<llm::Message>), Box<dyn Error>> {
     let mut messages = vec![
         llm::Message {
             role: "system".to_string(),
@@ -106,11 +113,119 @@ pub async fn generate_issue(
         },
     ];
 
-    let content: String = llm::generate_response(&mut messages).await?.message.content;
+    let content: String = llm::generate_response(&mut messages, endpoint)
+        .await?
+        .message
+        .content;
     let issue_content: IssueContent = serde_json::from_str(&content)?;
     messages.push(llm::Message {
         role: "assistant".to_string(),
         content: serde_json::json!(issue_content).to_string(),
     });
     Ok((issue_content, messages))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::MockChatServer;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn generate_issue_returns_parsed_content_and_history() {
+        let mock = MockChatServer::new().await;
+
+        let description = "Corriger l'erreur 500 sur la page des rapports";
+        let expected_messages = vec![
+            llm::Message {
+                role: "system".to_string(),
+                content: PROMPT_ISSUE.to_string(),
+            },
+            llm::Message {
+                role: "user".to_string(),
+                content: format!("Summarize the issue description: {}", description),
+            },
+        ];
+        let expected_body = serde_json::json!({
+            "model": "mistral:7b",
+            "messages": expected_messages,
+            "stream": false,
+            "format": "json"
+        });
+
+        let mocked_issue = IssueContent {
+            type_: "bug".to_string(),
+            title: "Fix report page 500 error".to_string(),
+            body: "**Context**\n- The reports page fails.\n\n**Steps to reproduce**\n1. Open reports\n2. Observe 500".to_string(),
+            labels: vec!["bug".to_string(), "chapter:back".to_string()],
+        };
+
+        let response_body = serde_json::json!({
+            "model": "mistral:7b",
+            "created_at": "now",
+            "done": true,
+            "message": {
+                "role": "assistant",
+                "content": serde_json::to_string(&mocked_issue).unwrap()
+            }
+        });
+
+        mock.expect_json(expected_body, response_body).await;
+
+        let (issue, history) = generate_issue_with_endpoint(description, &mock.endpoint)
+            .await
+            .unwrap();
+        assert_eq!(issue.title, mocked_issue.title);
+        assert_eq!(issue.type_, "bug");
+        assert_eq!(issue.labels, mocked_issue.labels);
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0].role, "system");
+        assert_eq!(history[2].role, "assistant");
+        assert_eq!(history[2].content, serde_json::json!(issue).to_string());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn generate_issue_fails_on_invalid_json_response() {
+        let mock = MockChatServer::new().await;
+
+        let description = "Refactor the API handler";
+        let expected_messages = vec![
+            llm::Message {
+                role: "system".to_string(),
+                content: PROMPT_ISSUE.to_string(),
+            },
+            llm::Message {
+                role: "user".to_string(),
+                content: format!("Summarize the issue description: {}", description),
+            },
+        ];
+        let expected_body = serde_json::json!({
+            "model": "mistral:7b",
+            "messages": expected_messages,
+            "stream": false,
+            "format": "json"
+        });
+
+        mock.expect_status(
+            expected_body,
+            200,
+            serde_json::json!({
+                "model": "mistral:7b",
+                "created_at": "now",
+                "done": true,
+                "message": {
+                    "role": "assistant",
+                    "content": "not-json"
+                }
+            }),
+        )
+        .await;
+
+        let err = generate_issue_with_endpoint(description, &mock.endpoint)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("expected"),
+            "unexpected error: {err}"
+        );
+    }
 }
