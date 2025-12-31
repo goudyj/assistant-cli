@@ -1,3 +1,4 @@
+pub mod github;
 pub mod issues;
 pub mod llm;
 
