@@ -10,83 +10,113 @@ This is a Rust CLI tool that generates GitHub issues using an LLM (Ollama with M
 
 ### Core Modules
 
+- **`auth`**: GitHub OAuth Device Flow authentication
+  - `DeviceFlowAuth::start(client_id)` initiates device flow
+  - `poll_for_token()` waits for user authorization
+  - Token stored securely in system keyring via `keyring` crate
+  - `get_stored_token()`, `store_token()`, `delete_token()` for keyring operations
+
+- **`config`**: Configuration management from `~/.config/assistant.json`
+  - `Config` struct with `github_client_id`, `projects: HashMap<String, ProjectConfig>`, and `last_project`
+  - `ProjectConfig` stores `owner`, `repo`, and `labels` per project
+  - `load_config()` reads from cross-platform config directory
+  - `Config::save()` persists config changes (e.g., last selected project)
+  - `last_project` is auto-saved when selecting a project and restored on startup
+
 - **`llm`**: LLM interaction layer that communicates with Ollama API endpoints
   - Uses `reqwest` for HTTP requests to `/api/chat` endpoint
-  - Expects JSON responses conforming to `ChatChunk` structure
   - Model: `mistral:7b` with JSON output format
-  - Configurable endpoint via `LLM_ENDPOINT` environment variable (default: `http://localhost:11434/api/chat`)
+  - Configurable endpoint via `LLM_ENDPOINT` environment variable
 
 - **`issues`**: Issue generation logic with conversational refinement
-  - Contains `PROMPT_ISSUE` constant with detailed system prompt for GitHub issue formatting
+  - `build_prompt(labels)` generates system prompt with project-specific labels
   - Supports two issue types: `bug` and `task`, each with specific markdown structure
-  - Main function: `generate_issue()` creates initial issue from description
-  - Maintains conversation history (`Vec<llm::Message>`) for iterative refinement
-  - Returns `IssueContent` struct with `type_`, `title`, `body`, and `labels` fields
+  - `generate_issue_with_labels()` creates issue with custom label set
 
-- **`github`**: GitHub API integration using `octocrab` (currently stub implementation)
-  - `GitHubConfig` struct stores token, owner, and repo
-  - `create_issue()` method shows pattern for creating issues via GitHub API
+- **`github`**: GitHub API integration using `octocrab`
+  - `GitHubConfig::from_keyring(owner, repo)` loads token from system keyring
+  - `create_issue(&IssueContent)` creates issue on GitHub with labels
 
 - **`main.rs`**: REPL interface using `reedline` with session management
-  - Commands: `/issue <desc>`, `/ok` (creates issue), `/quit`, `/help`
-  - Session state: tracks current `IssueContent` and conversation `messages`
-  - Feedback loop: users can provide feedback to refine generated issues before creation
+  - Commands: `/login`, `/logout`, `/repository <name>`, `/issue <desc>`, `/ok`, `/quit`
+  - `AppState` tracks config, current project, and issue session
 
 ### Key Flows
 
-**Issue Generation Flow:**
-1. User enters `/issue <description>`
-2. `issues::generate_issue()` sends description + system prompt to LLM
-3. LLM returns JSON-formatted `IssueContent`
-4. Issue displayed to user with color-coded output
-5. User can provide feedback to refine, or `/ok` to create (not yet implemented)
-6. Feedback updates sent to LLM with full conversation history
+**Authentication Flow (OAuth Device Flow):**
+1. User runs `/login`
+2. App requests device code from GitHub with `client_id`
+3. Browser opens to `github.com/login/device`
+4. User enters the displayed code
+5. App polls GitHub until authorized
+6. Token stored in system keyring
 
-**LLM Interaction Pattern:**
-- All messages stored as `Vec<llm::Message>` with `role` (system/user/assistant) and `content`
-- System prompt defines issue format and rules (see `PROMPT_ISSUE` in `issues.rs`)
-- LLM configured with `"format": "json"` to enforce structured output
-- Response content parsed as `IssueContent` struct
+**Issue Generation Flow:**
+1. User selects project with `/repository <name>`
+2. User enters `/issue <description>`
+3. `issues::generate_issue_with_labels()` sends description + prompt with project labels to LLM
+4. User can provide feedback to refine, or `/ok` to create on GitHub
+
+## Configuration
+
+**File: `~/.config/assistant.json`**
+```json
+{
+  "github_client_id": "Ov23liXXXXXX",
+  "projects": {
+    "my-project": {
+      "owner": "username",
+      "repo": "my-repo",
+      "labels": ["bug", "feature", "backend"]
+    }
+  },
+  "last_project": "my-project"
+}
+```
+
+Note: `last_project` is automatically managed by the application.
 
 ## Development Commands
 
-### Build and Run
 ```bash
-cargo build
-cargo run
-```
-
-### Testing
-```bash
-# Run all tests
-cargo test
-
-# Run tests with output visible
-cargo test -- --nocapture
-
-# Run single test
-cargo test test_name
-
-# Run tests for specific module
-cargo test llm::tests
-cargo test issues::tests
+cargo build                         # Build
+cargo run                           # Run
+cargo test                          # Run all tests
+cargo test -- --nocapture           # With output
+cargo test config::tests            # Module tests
 ```
 
 ### Test Infrastructure
 - Uses `wiremock` for HTTP mocking (see `test_helpers::MockChatServer`)
 - Tests use `#[tokio::test(flavor = "current_thread")]` for async
-- `MockChatServer` provides `expect_json()` and `expect_status()` helpers
 
-## Environment Configuration
+## Environment Variables
 
-- **`LLM_ENDPOINT`**: Override default Ollama endpoint (default: `http://localhost:11434/api/chat`)
-- **`GITHUB_TOKEN`**: Required for GitHub API operations (loaded via `dotenvy`)
+- **`LLM_ENDPOINT`**: Override Ollama endpoint (default: `http://localhost:11434/api/chat`)
+
+## CLI Commands
+
+```
+/login              - Authenticate with GitHub (opens browser)
+/logout             - Remove GitHub authentication
+/repository <name>  - Select a project from config
+/repository         - Open interactive project selector
+/repo               - Alias for /repository
+/issue <desc>       - Generate an issue from description
+/ok                 - Create the issue on GitHub
+/help               - Show help
+/quit               - Exit
+```
+
+## Code Style
+
+- **All code, comments, and documentation must be in English**
+- Commit messages follow Conventional Commits: `feat:`, `fix:`, `chore:`
 
 ## Important Conventions
 
-- Issue types must be either `"bug"` or `"task"` (field name is `type_` to avoid Rust keyword)
-- Bug issues require sections: **Context**, **Steps to reproduce**, optionally **Expected/Actual behavior**
-- Task issues require: **Context**, **Goal**, **Acceptance criteria** (checkboxes)
-- Labels follow pattern: `["bug"]` or `["chapter:back", "chapter:front", "chapter:sre"]`
-- All generated issue content must be in English, regardless of input language
-- Conversation history preserved across refinement iterations
+- Issue types: `"bug"` or `"task"` (field name is `type_` to avoid Rust keyword)
+- Bug issues require: **Context**, **Steps to reproduce**
+- Task issues require: **Context**, **Goal**, **Acceptance criteria**
+- Labels are project-specific, defined in config file
+- Token stored in system keyring (service: `assistant-cli`, key: `github_token`)
