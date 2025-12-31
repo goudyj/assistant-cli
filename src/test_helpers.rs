@@ -43,4 +43,13 @@ impl MockChatServer {
             .mount(&self.server)
             .await;
     }
+
+    /// Mount a flexible mock that accepts any POST to /api/chat and returns the given response
+    pub async fn expect_any(&self, response_body: serde_json::Value) {
+        Mock::given(method("POST"))
+            .and(path("/api/chat"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
+            .mount(&self.server)
+            .await;
+    }
 }

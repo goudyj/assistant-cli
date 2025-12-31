@@ -1,36 +1,69 @@
+use crate::auth;
+use crate::issues::IssueContent;
 use octocrab::Octocrab;
 
+#[derive(Debug, Clone)]
 pub struct GitHubConfig {
-    pub token: String,
-    owner: String,
-    repo: String,
+    token: String,
+    pub owner: String,
+    pub repo: String,
 }
 
+#[derive(Debug)]
+pub enum GitHubError {
+    NotAuthenticated,
+    TokenExpired,
+    ApiError(String),
+}
+
+impl std::fmt::Display for GitHubError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GitHubError::NotAuthenticated => write!(f, "Not authenticated. Use /login first."),
+            GitHubError::TokenExpired => write!(f, "Token expired or revoked. Use /logout then /login to re-authenticate."),
+            GitHubError::ApiError(msg) => write!(f, "GitHub API error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for GitHubError {}
+
 impl GitHubConfig {
-    pub fn get_github_client(&self) -> Octocrab {
-        Octocrab::builder()
-            .personal_token(self.token.to_string())
-            .build()
-            .unwrap()
+    pub fn new(owner: String, repo: String, token: String) -> Self {
+        Self { token, owner, repo }
     }
 
-    pub async fn create_issue(&self) {
-        let github = self.get_github_client();
+    pub fn from_keyring(owner: String, repo: String) -> Result<Self, GitHubError> {
+        let token = auth::get_stored_token().map_err(|_| GitHubError::NotAuthenticated)?;
+        Ok(Self::new(owner, repo, token))
+    }
 
-        // Example usage: create an issue in a repository
-        let repo_owner = "owner";
-        let repo_name = "repo";
-        let issue_title = "Issue Title";
-        let issue_body = "Issue Body";
+    fn get_client(&self) -> Result<Octocrab, GitHubError> {
+        Octocrab::builder()
+            .personal_token(self.token.clone())
+            .build()
+            .map_err(|e| GitHubError::ApiError(e.to_string()))
+    }
 
-        let issue = github
-            .issues(repo_owner, repo_name)
-            .create(issue_title)
-            .body(issue_body)
+    pub async fn create_issue(&self, issue: &IssueContent) -> Result<String, GitHubError> {
+        let client = self.get_client()?;
+
+        let created = client
+            .issues(&self.owner, &self.repo)
+            .create(&issue.title)
+            .body(&issue.body)
+            .labels(issue.labels.clone())
             .send()
             .await
-            .unwrap();
+            .map_err(|e| {
+                let msg = e.to_string();
+                if msg.contains("401") || msg.to_lowercase().contains("unauthorized") {
+                    GitHubError::TokenExpired
+                } else {
+                    GitHubError::ApiError(msg)
+                }
+            })?;
 
-        println!("Created issue: {}", issue.html_url);
+        Ok(created.html_url.to_string())
     }
 }
