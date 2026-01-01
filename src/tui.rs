@@ -80,6 +80,8 @@ pub struct IssueBrowser {
     pub local_path: Option<std::path::PathBuf>,
     // Multi-select for batch dispatch
     pub selected_issues: std::collections::HashSet<u64>,
+    // Session cache for dispatch status display
+    pub session_cache: std::collections::HashMap<u64, crate::agents::AgentSession>,
 }
 
 impl IssueBrowser {
@@ -141,13 +143,27 @@ impl IssueBrowser {
             project_name: None,
             local_path: None,
             selected_issues: std::collections::HashSet::new(),
+            session_cache: std::collections::HashMap::new(),
         }
     }
 
     /// Set project info for Claude Code dispatch
     pub fn set_project_info(&mut self, name: String, path: std::path::PathBuf) {
-        self.project_name = Some(name);
+        self.project_name = Some(name.clone());
         self.local_path = Some(path);
+        // Load sessions for this project
+        self.refresh_sessions(&name);
+    }
+
+    /// Refresh session cache for the current project
+    pub fn refresh_sessions(&mut self, project: &str) {
+        let manager = crate::agents::SessionManager::load();
+        self.session_cache.clear();
+        for session in manager.list() {
+            if session.project == project {
+                self.session_cache.insert(session.issue_number, session.clone());
+            }
+        }
     }
 
     /// Load the next page of issues
@@ -548,12 +564,33 @@ fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
 }
 
 fn draw_list_view(f: &mut Frame, browser: &mut IssueBrowser) {
+    use crate::agents::AgentStatus;
+
     let items: Vec<ListItem> = browser
         .issues
         .iter()
         .map(|issue| {
             let is_selected = browser.selected_issues.contains(&issue.number);
             let select_marker = if is_selected { "[x] " } else { "[ ] " };
+
+            // Check session status for this issue
+            let session_info = browser.session_cache.get(&issue.number);
+            let (session_icon, session_color, session_stats) = match session_info {
+                Some(session) => {
+                    let (icon, color) = match &session.status {
+                        AgentStatus::Running => ("▶", Color::Yellow),
+                        AgentStatus::Completed { .. } => ("✓", Color::Green),
+                        AgentStatus::Failed { .. } => ("✗", Color::Red),
+                    };
+                    let stats = if session.stats.lines_added > 0 || session.stats.lines_deleted > 0 {
+                        format!(" +{} -{}", session.stats.lines_added, session.stats.lines_deleted)
+                    } else {
+                        String::new()
+                    };
+                    (Some(icon), color, stats)
+                }
+                None => (None, Color::DarkGray, String::new()),
+            };
 
             let labels_str = if issue.labels.is_empty() {
                 String::new()
@@ -589,6 +626,16 @@ fn draw_list_view(f: &mut Frame, browser: &mut IssueBrowser) {
                     Span::styled(assignees_str, Style::default().fg(Color::DarkGray)),
                 ])
             } else {
+                // Build session status span
+                let session_span = if let Some(icon) = session_icon {
+                    Span::styled(
+                        format!("{}{} ", icon, session_stats),
+                        Style::default().fg(session_color),
+                    )
+                } else {
+                    Span::raw("   ")
+                };
+
                 Line::from(vec![
                     Span::styled(
                         select_marker,
@@ -598,7 +645,7 @@ fn draw_list_view(f: &mut Frame, browser: &mut IssueBrowser) {
                         format!("#{:<5}", issue.number),
                         Style::default().fg(Color::Cyan),
                     ),
-                    Span::raw("   "),
+                    session_span,
                     Span::raw(&issue.title),
                     Span::styled(labels_str, Style::default().fg(Color::DarkGray)),
                     Span::styled(assignees_str, Style::default().fg(Color::Magenta)),
@@ -630,7 +677,7 @@ fn draw_list_view(f: &mut Frame, browser: &mut IssueBrowser) {
             parts.push(format!("[{} selected]", browser.selected_issues.len()));
         }
 
-        format!(" {} │ Space select │ d dispatch │ / search │ c clear │ q quit ", parts.join(" "))
+        format!(" {} │ Space select │ d dispatch │ t tmux │ / search │ c clear │ q quit ", parts.join(" "))
     };
 
     let list = List::new(items)
@@ -1173,7 +1220,7 @@ fn draw_agent_list(f: &mut Frame, sessions: &[crate::agents::AgentSession], sele
         .collect();
 
     let title = format!(
-        " Agents ({}) │ Enter logs │ D diff │ p PR │ o open │ C clean │ K kill │ q back ",
+        " Agents ({}) │ t tmux │ Enter logs │ D diff │ p PR │ o open │ C clean │ K kill │ q back ",
         sessions.len()
     );
 
@@ -1253,6 +1300,31 @@ fn format_date(date_str: &str) -> String {
     }
 }
 
+/// Attach to a tmux session, temporarily exiting the TUI
+fn attach_to_tmux_session(session_name: &str) -> io::Result<()> {
+    // Exit raw mode and alternate screen
+    disable_raw_mode()?;
+    execute!(io::stdout(), LeaveAlternateScreen)?;
+
+    // Run tmux attach interactively
+    let status = std::process::Command::new("tmux")
+        .args(["attach", "-t", session_name])
+        .status()?;
+
+    // Re-enter alternate screen and raw mode
+    execute!(io::stdout(), EnterAlternateScreen)?;
+    enable_raw_mode()?;
+
+    if !status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "tmux attach failed",
+        ));
+    }
+
+    Ok(())
+}
+
 async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
     // Clear status message on any keypress
     browser.status_message = None;
@@ -1328,6 +1400,30 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
 
                     browser.status_message = Some(format!("Dispatched {} issues to Claude Code.", count));
                     browser.selected_issues.clear();
+                    // Refresh session cache
+                    if let Some(project) = browser.project_name.clone() {
+                        browser.refresh_sessions(&project);
+                    }
+                }
+            }
+            KeyCode::Char('t') => {
+                // Attach to tmux session for current issue
+                if let Some(issue) = browser.selected_issue() {
+                    let issue_number = issue.number;
+                    if let Some(project) = browser.project_name.clone() {
+                        let tmux_name = crate::agents::tmux_session_name(&project, issue_number);
+                        if crate::agents::is_tmux_session_running(&tmux_name) {
+                            if let Err(e) = attach_to_tmux_session(&tmux_name) {
+                                browser.status_message = Some(format!("Failed to attach: {}", e));
+                            }
+                            // Refresh sessions after returning from tmux
+                            browser.refresh_sessions(&project);
+                        } else {
+                            browser.status_message = Some("No active session for this issue".to_string());
+                        }
+                    } else {
+                        browser.status_message = Some("No project selected".to_string());
+                    }
                 }
             }
             _ => {}
@@ -1859,6 +1955,23 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                                     selected: new_selected,
                                 };
                             }
+                    }
+            }
+            KeyCode::Char('t') => {
+                // Attach to tmux session
+                if let Some(session) = sessions.get(*selected)
+                    && session.is_running() {
+                        let tmux_name = crate::agents::tmux_session_name(&session.project, session.issue_number);
+                        if let Err(e) = attach_to_tmux_session(&tmux_name) {
+                            browser.status_message = Some(format!("Failed to attach: {}", e));
+                        }
+                        // Refresh sessions after returning from tmux
+                        let manager = crate::agents::SessionManager::load();
+                        let sessions_list: Vec<_> = manager.list().to_vec();
+                        browser.view = TuiView::AgentList {
+                            sessions: sessions_list,
+                            selected: *selected,
+                        };
                     }
             }
             _ => {}

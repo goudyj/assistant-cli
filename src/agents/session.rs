@@ -161,6 +161,13 @@ impl SessionManager {
         self.sessions.iter_mut().find(|s| s.id == id)
     }
 
+    /// Get a session by project and issue number
+    pub fn get_by_issue(&self, project: &str, issue_number: u64) -> Option<&AgentSession> {
+        self.sessions
+            .iter()
+            .find(|s| s.project == project && s.issue_number == issue_number)
+    }
+
     /// Add a new session
     pub fn add(&mut self, session: AgentSession) {
         self.sessions.push(session);
