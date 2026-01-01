@@ -192,18 +192,9 @@ fn is_claude_idle(pane_content: &str) -> bool {
     let last_lines: Vec<&str> = lines.iter().rev().take(10).copied().collect();
 
     // Claude Code shows ">" prompt when waiting for input
-    // Also check for common idle patterns
     for line in &last_lines {
         let trimmed = line.trim();
-        // Empty line followed by prompt indicator
         if trimmed == ">" || trimmed.ends_with("> ") {
-            return true;
-        }
-        // Check for "waiting" or completion indicators
-        if trimmed.contains("What would you like")
-            || trimmed.contains("Is there anything else")
-            || trimmed.contains("Let me know if")
-        {
             return true;
         }
     }
