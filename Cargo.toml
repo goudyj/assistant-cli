@@ -23,6 +23,7 @@ ratatui = "0.30"
 regex = "1"
 image = "0.25"
 ratatui-image = { version = "10.0.2", default-features = false, features = ["crossterm", "image-defaults"] }
+fuzzy-matcher = "0.3.7"
 
 [dev-dependencies]
 wiremock = "0.6"

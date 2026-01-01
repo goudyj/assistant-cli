@@ -1,5 +1,6 @@
 use crate::auth;
 use crate::issues::IssueContent;
+use crate::list::IssueState;
 use octocrab::Octocrab;
 
 #[derive(Debug, Clone)]
@@ -16,6 +17,7 @@ pub struct IssueSummary {
     pub html_url: String,
     pub labels: Vec<String>,
     pub state: String,
+    pub assignees: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +28,7 @@ pub struct IssueDetail {
     pub html_url: String,
     pub labels: Vec<String>,
     pub state: String,
+    pub assignees: Vec<String>,
     pub comments: Vec<CommentInfo>,
 }
 
@@ -97,21 +100,45 @@ impl GitHubConfig {
     pub async fn list_issues(
         &self,
         labels: &[String],
+        state: &IssueState,
         limit: u8,
     ) -> Result<Vec<IssueSummary>, GitHubError> {
+        let (issues, _) = self.list_issues_paginated(labels, state, limit, 1).await?;
+        Ok(issues)
+    }
+
+    /// List issues with pagination support
+    /// Returns (issues, has_next_page)
+    pub async fn list_issues_paginated(
+        &self,
+        labels: &[String],
+        state: &IssueState,
+        per_page: u8,
+        page_num: u32,
+    ) -> Result<(Vec<IssueSummary>, bool), GitHubError> {
         let client = self.get_client()?;
+
+        let octocrab_state = match state {
+            IssueState::Open => octocrab::params::State::Open,
+            IssueState::Closed => octocrab::params::State::Closed,
+            IssueState::All => octocrab::params::State::All,
+        };
 
         let page = client
             .issues(&self.owner, &self.repo)
             .list()
             .labels(labels)
-            .state(octocrab::params::State::Open)
-            .per_page(limit)
+            .state(octocrab_state)
+            .per_page(per_page)
+            .page(page_num)
             .send()
             .await
             .map_err(Self::map_api_error)?;
 
-        Ok(page
+        // Check if there's a next page by looking at the page info
+        let has_next = page.next.is_some();
+
+        let issues = page
             .items
             .into_iter()
             .map(|issue| IssueSummary {
@@ -120,8 +147,11 @@ impl GitHubConfig {
                 html_url: issue.html_url.to_string(),
                 labels: issue.labels.iter().map(|l| l.name.clone()).collect(),
                 state: format!("{:?}", issue.state),
+                assignees: issue.assignees.iter().map(|u| u.login.clone()).collect(),
             })
-            .collect())
+            .collect();
+
+        Ok((issues, has_next))
     }
 
     pub async fn get_issue(&self, number: u64) -> Result<IssueDetail, GitHubError> {
@@ -159,6 +189,7 @@ impl GitHubConfig {
             html_url: issue.html_url.to_string(),
             labels: issue.labels.iter().map(|l| l.name.clone()).collect(),
             state: format!("{:?}", issue.state),
+            assignees: issue.assignees.iter().map(|u| u.login.clone()).collect(),
             comments,
         })
     }
@@ -179,6 +210,100 @@ impl GitHubConfig {
         Ok(comment.html_url.to_string())
     }
 
+    pub async fn close_issue(&self, issue_number: u64) -> Result<(), GitHubError> {
+        let client = self.get_client()?;
+
+        client
+            .issues(&self.owner, &self.repo)
+            .update(issue_number)
+            .state(octocrab::models::IssueState::Closed)
+            .send()
+            .await
+            .map_err(Self::map_api_error)?;
+
+        Ok(())
+    }
+
+    pub async fn reopen_issue(&self, issue_number: u64) -> Result<(), GitHubError> {
+        let client = self.get_client()?;
+
+        client
+            .issues(&self.owner, &self.repo)
+            .update(issue_number)
+            .state(octocrab::models::IssueState::Open)
+            .send()
+            .await
+            .map_err(Self::map_api_error)?;
+
+        Ok(())
+    }
+
+    /// List available assignees for the repository
+    pub async fn list_assignees(&self) -> Result<Vec<String>, GitHubError> {
+        let client = self.get_client()?;
+
+        let page = client
+            .repos(&self.owner, &self.repo)
+            .list_collaborators()
+            .send()
+            .await
+            .map_err(Self::map_api_error)?;
+
+        Ok(page.items.into_iter().map(|u| u.author.login).collect())
+    }
+
+    /// Assign users to an issue
+    pub async fn assign_issue(
+        &self,
+        issue_number: u64,
+        assignees: &[String],
+    ) -> Result<(), GitHubError> {
+        let client = self.get_client()?;
+
+        client
+            .issues(&self.owner, &self.repo)
+            .update(issue_number)
+            .assignees(assignees)
+            .send()
+            .await
+            .map_err(Self::map_api_error)?;
+
+        Ok(())
+    }
+
+    /// Remove assignees from an issue
+    pub async fn unassign_issue(
+        &self,
+        issue_number: u64,
+        assignees: &[String],
+    ) -> Result<(), GitHubError> {
+        let client = self.get_client()?;
+
+        // To unassign, we need to set the assignees to the current list minus the ones to remove
+        // First, get current assignees
+        let issue = client
+            .issues(&self.owner, &self.repo)
+            .get(issue_number)
+            .await
+            .map_err(Self::map_api_error)?;
+
+        let current: Vec<String> = issue.assignees.iter().map(|u| u.login.clone()).collect();
+        let new_assignees: Vec<String> = current
+            .into_iter()
+            .filter(|a| !assignees.contains(a))
+            .collect();
+
+        client
+            .issues(&self.owner, &self.repo)
+            .update(issue_number)
+            .assignees(&new_assignees)
+            .send()
+            .await
+            .map_err(Self::map_api_error)?;
+
+        Ok(())
+    }
+
     fn map_api_error(e: octocrab::Error) -> GitHubError {
         let msg = e.to_string();
         if msg.contains("401") || msg.to_lowercase().contains("unauthorized") {
@@ -192,6 +317,8 @@ impl GitHubConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn github_config_new() {
@@ -230,6 +357,7 @@ mod tests {
             html_url: "https://github.com/test/test/issues/42".to_string(),
             labels: vec!["bug".to_string()],
             state: "Open".to_string(),
+            assignees: vec!["user1".to_string()],
         };
         let cloned = summary.clone();
         assert_eq!(cloned.number, 42);
@@ -245,6 +373,7 @@ mod tests {
             html_url: "https://github.com/test/test/issues/1".to_string(),
             labels: vec!["bug".to_string(), "priority".to_string()],
             state: "Open".to_string(),
+            assignees: vec!["user1".to_string()],
             comments: vec![
                 CommentInfo {
                     id: 100,
@@ -256,5 +385,322 @@ mod tests {
         };
         assert_eq!(detail.comments.len(), 1);
         assert_eq!(detail.comments[0].author, "user1");
+    }
+
+    fn mock_issue_response(number: u64, state: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": number,
+            "node_id": "I_test",
+            "number": number,
+            "title": "Test issue",
+            "state": state,
+            "state_reason": null,
+            "locked": false,
+            "html_url": format!("https://github.com/owner/repo/issues/{}", number),
+            "url": format!("https://api.github.com/repos/owner/repo/issues/{}", number),
+            "repository_url": "https://api.github.com/repos/owner/repo",
+            "labels_url": "https://api.github.com/repos/owner/repo/issues/{}/labels{{/name}}",
+            "comments_url": "https://api.github.com/repos/owner/repo/issues/{}/comments",
+            "events_url": "https://api.github.com/repos/owner/repo/issues/{}/events",
+            "labels": [],
+            "user": {
+                "login": "test",
+                "id": 1,
+                "node_id": "U_test",
+                "avatar_url": "https://avatars.githubusercontent.com/u/1",
+                "gravatar_id": "",
+                "url": "https://api.github.com/users/test",
+                "html_url": "https://github.com/test",
+                "followers_url": "https://api.github.com/users/test/followers",
+                "following_url": "https://api.github.com/users/test/following{/other_user}",
+                "gists_url": "https://api.github.com/users/test/gists{/gist_id}",
+                "starred_url": "https://api.github.com/users/test/starred{/owner}{/repo}",
+                "subscriptions_url": "https://api.github.com/users/test/subscriptions",
+                "organizations_url": "https://api.github.com/users/test/orgs",
+                "repos_url": "https://api.github.com/users/test/repos",
+                "events_url": "https://api.github.com/users/test/events{/privacy}",
+                "received_events_url": "https://api.github.com/users/test/received_events",
+                "type": "User",
+                "site_admin": false
+            },
+            "assignees": [],
+            "milestone": null,
+            "comments": 0,
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z",
+            "closed_at": null,
+            "author_association": "OWNER",
+            "body": "Test body"
+        })
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn close_issue_success() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/owner/repo/issues/123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_issue_response(123, "closed")))
+            .mount(&server)
+            .await;
+
+        let client = Octocrab::builder()
+            .personal_token("token".to_string())
+            .base_uri(&server.uri())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let result = client
+            .issues("owner", "repo")
+            .update(123u64)
+            .state(octocrab::models::IssueState::Closed)
+            .send()
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn reopen_issue_success() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/owner/repo/issues/456"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mock_issue_response(456, "open")))
+            .mount(&server)
+            .await;
+
+        let client = Octocrab::builder()
+            .personal_token("token".to_string())
+            .base_uri(&server.uri())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let result = client
+            .issues("owner", "repo")
+            .update(456u64)
+            .state(octocrab::models::IssueState::Open)
+            .send()
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn close_issue_not_found() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/owner/repo/issues/999"))
+            .respond_with(
+                ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                    "message": "Not Found"
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = Octocrab::builder()
+            .personal_token("token".to_string())
+            .base_uri(&server.uri())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let result = client
+            .issues("owner", "repo")
+            .update(999u64)
+            .state(octocrab::models::IssueState::Closed)
+            .send()
+            .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn close_issue_forbidden() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/owner/repo/issues/123"))
+            .respond_with(
+                ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                    "message": "Forbidden"
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = Octocrab::builder()
+            .personal_token("token".to_string())
+            .base_uri(&server.uri())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let result = client
+            .issues("owner", "repo")
+            .update(123u64)
+            .state(octocrab::models::IssueState::Closed)
+            .send()
+            .await;
+
+        assert!(result.is_err());
+    }
+
+    fn mock_issue_with_assignees(number: u64, assignees: Vec<&str>) -> serde_json::Value {
+        let assignee_objects: Vec<serde_json::Value> = assignees
+            .iter()
+            .map(|login| {
+                serde_json::json!({
+                    "login": login,
+                    "id": 1,
+                    "node_id": "U_test",
+                    "avatar_url": "https://avatars.githubusercontent.com/u/1",
+                    "gravatar_id": "",
+                    "url": format!("https://api.github.com/users/{}", login),
+                    "html_url": format!("https://github.com/{}", login),
+                    "followers_url": format!("https://api.github.com/users/{}/followers", login),
+                    "following_url": format!("https://api.github.com/users/{}/following{{/other_user}}", login),
+                    "gists_url": format!("https://api.github.com/users/{}/gists{{/gist_id}}", login),
+                    "starred_url": format!("https://api.github.com/users/{}/starred{{/owner}}{{/repo}}", login),
+                    "subscriptions_url": format!("https://api.github.com/users/{}/subscriptions", login),
+                    "organizations_url": format!("https://api.github.com/users/{}/orgs", login),
+                    "repos_url": format!("https://api.github.com/users/{}/repos", login),
+                    "events_url": format!("https://api.github.com/users/{}/events{{/privacy}}", login),
+                    "received_events_url": format!("https://api.github.com/users/{}/received_events", login),
+                    "type": "User",
+                    "site_admin": false
+                })
+            })
+            .collect();
+
+        serde_json::json!({
+            "id": number,
+            "node_id": "I_test",
+            "number": number,
+            "title": "Test issue",
+            "state": "open",
+            "state_reason": null,
+            "locked": false,
+            "html_url": format!("https://github.com/owner/repo/issues/{}", number),
+            "url": format!("https://api.github.com/repos/owner/repo/issues/{}", number),
+            "repository_url": "https://api.github.com/repos/owner/repo",
+            "labels_url": "https://api.github.com/repos/owner/repo/issues/{}/labels{/name}",
+            "comments_url": "https://api.github.com/repos/owner/repo/issues/{}/comments",
+            "events_url": "https://api.github.com/repos/owner/repo/issues/{}/events",
+            "labels": [],
+            "user": {
+                "login": "test",
+                "id": 1,
+                "node_id": "U_test",
+                "avatar_url": "https://avatars.githubusercontent.com/u/1",
+                "gravatar_id": "",
+                "url": "https://api.github.com/users/test",
+                "html_url": "https://github.com/test",
+                "followers_url": "https://api.github.com/users/test/followers",
+                "following_url": "https://api.github.com/users/test/following{/other_user}",
+                "gists_url": "https://api.github.com/users/test/gists{/gist_id}",
+                "starred_url": "https://api.github.com/users/test/starred{/owner}{/repo}",
+                "subscriptions_url": "https://api.github.com/users/test/subscriptions",
+                "organizations_url": "https://api.github.com/users/test/orgs",
+                "repos_url": "https://api.github.com/users/test/repos",
+                "events_url": "https://api.github.com/users/test/events{/privacy}",
+                "received_events_url": "https://api.github.com/users/test/received_events",
+                "type": "User",
+                "site_admin": false
+            },
+            "assignees": assignee_objects,
+            "milestone": null,
+            "comments": 0,
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z",
+            "closed_at": null,
+            "author_association": "OWNER",
+            "body": "Test body"
+        })
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn assign_issue_success() {
+        let server = MockServer::start().await;
+
+        // Mock the PATCH request to add assignees
+        Mock::given(method("PATCH"))
+            .and(path("/repos/owner/repo/issues/123"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(mock_issue_with_assignees(123, vec!["user1"])),
+            )
+            .mount(&server)
+            .await;
+
+        let client = Octocrab::builder()
+            .personal_token("token".to_string())
+            .base_uri(&server.uri())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let assignees = vec!["user1".to_string()];
+        let result = client
+            .issues("owner", "repo")
+            .update(123u64)
+            .assignees(&assignees)
+            .send()
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn unassign_issue_removes_assignee() {
+        let server = MockServer::start().await;
+
+        // Mock GET request to get current issue with assignees
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo/issues/123"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(mock_issue_with_assignees(123, vec!["user1", "user2"])),
+            )
+            .mount(&server)
+            .await;
+
+        // Mock PATCH request to update assignees (remove user1)
+        Mock::given(method("PATCH"))
+            .and(path("/repos/owner/repo/issues/123"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(mock_issue_with_assignees(123, vec!["user2"])),
+            )
+            .mount(&server)
+            .await;
+
+        let client = Octocrab::builder()
+            .personal_token("token".to_string())
+            .base_uri(&server.uri())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Get the current issue
+        let issue = client.issues("owner", "repo").get(123u64).await;
+        assert!(issue.is_ok());
+        let issue = issue.unwrap();
+        assert_eq!(issue.assignees.len(), 2);
+
+        // Update with user2 only (removing user1)
+        let assignees = vec!["user2".to_string()];
+        let result = client
+            .issues("owner", "repo")
+            .update(123u64)
+            .assignees(&assignees)
+            .send()
+            .await;
+
+        assert!(result.is_ok());
     }
 }

@@ -5,6 +5,8 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use fuzzy_matcher::skim::SkimMatcherV2;
+use fuzzy_matcher::FuzzyMatcher;
 use image::ImageReader;
 use ratatui::{
     backend::CrosstermBackend,
@@ -21,12 +23,22 @@ use std::io::{self, Cursor};
 /// View state for the TUI
 pub enum TuiView {
     List,
+    Search { input: String },
     Detail(IssueDetail),
     AddComment { issue: IssueDetail, input: String },
+    ConfirmClose { issue: IssueDetail },
+    ConfirmReopen { issue: IssueDetail },
+    AssignUser {
+        issue: IssueDetail,
+        input: String,
+        suggestions: Vec<String>,
+        selected: usize,
+    },
 }
 
 /// Main TUI state
 pub struct IssueBrowser {
+    pub all_issues: Vec<IssueSummary>,
     pub issues: Vec<IssueSummary>,
     pub list_state: ListState,
     pub view: TuiView,
@@ -39,6 +51,15 @@ pub struct IssueBrowser {
     pub status_message: Option<String>,
     pub current_images: Vec<String>,
     pub current_image_index: usize,
+    pub search_query: Option<String>,
+    // Pagination state
+    pub current_page: u32,
+    pub has_next_page: bool,
+    pub is_loading: bool,
+    pub list_labels: Vec<String>,
+    pub list_state_filter: crate::list::IssueState,
+    // Assignees cache
+    pub available_assignees: Vec<String>,
 }
 
 impl IssueBrowser {
@@ -49,11 +70,34 @@ impl IssueBrowser {
         auto_format: bool,
         llm_endpoint: String,
     ) -> Self {
+        Self::with_pagination(
+            issues,
+            github,
+            github_token,
+            auto_format,
+            llm_endpoint,
+            Vec::new(),
+            crate::list::IssueState::Open,
+            false,
+        )
+    }
+
+    pub fn with_pagination(
+        issues: Vec<IssueSummary>,
+        github: GitHubConfig,
+        github_token: Option<String>,
+        auto_format: bool,
+        llm_endpoint: String,
+        list_labels: Vec<String>,
+        list_state_filter: crate::list::IssueState,
+        has_next_page: bool,
+    ) -> Self {
         let mut list_state = ListState::default();
         if !issues.is_empty() {
             list_state.select(Some(0));
         }
         Self {
+            all_issues: issues.clone(),
             issues,
             list_state,
             view: TuiView::List,
@@ -66,7 +110,120 @@ impl IssueBrowser {
             status_message: None,
             current_images: Vec::new(),
             current_image_index: 0,
+            search_query: None,
+            current_page: 1,
+            has_next_page,
+            is_loading: false,
+            list_labels,
+            list_state_filter,
+            available_assignees: Vec::new(),
         }
+    }
+
+    /// Load the next page of issues
+    pub async fn load_next_page(&mut self) {
+        if !self.has_next_page || self.is_loading {
+            return;
+        }
+
+        self.is_loading = true;
+        self.status_message = Some("Loading more issues...".to_string());
+
+        let next_page = self.current_page + 1;
+        match self
+            .github
+            .list_issues_paginated(&self.list_labels, &self.list_state_filter, 20, next_page)
+            .await
+        {
+            Ok((new_issues, has_next)) => {
+                // Append new issues to the list
+                self.all_issues.extend(new_issues.clone());
+
+                // If we have a search filter, apply it to the new issues too
+                if let Some(ref query) = self.search_query {
+                    let query_lower = query.to_lowercase();
+                    let filtered: Vec<_> = new_issues
+                        .into_iter()
+                        .filter(|issue| {
+                            issue.title.to_lowercase().contains(&query_lower)
+                                || issue.labels.iter().any(|l| l.to_lowercase().contains(&query_lower))
+                        })
+                        .collect();
+                    self.issues.extend(filtered);
+                } else {
+                    self.issues.extend(new_issues);
+                }
+
+                self.current_page = next_page;
+                self.has_next_page = has_next;
+                self.status_message = Some(format!("Loaded page {} ({} issues total)", next_page, self.all_issues.len()));
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Failed to load more: {}", e));
+            }
+        }
+        self.is_loading = false;
+    }
+
+    /// Filter issues based on search query
+    pub fn apply_search_filter(&mut self, query: &str) {
+        if query.is_empty() {
+            self.issues = self.all_issues.clone();
+            self.search_query = None;
+        } else {
+            let query_lower = query.to_lowercase();
+            self.issues = self.all_issues
+                .iter()
+                .filter(|issue| {
+                    issue.title.to_lowercase().contains(&query_lower)
+                        || issue.labels.iter().any(|l| l.to_lowercase().contains(&query_lower))
+                })
+                .cloned()
+                .collect();
+            self.search_query = Some(query.to_string());
+        }
+
+        // Reset selection
+        if !self.issues.is_empty() {
+            self.list_state.select(Some(0));
+        } else {
+            self.list_state.select(None);
+        }
+    }
+
+    /// Clear search filter and restore all issues
+    pub fn clear_search(&mut self) {
+        self.issues = self.all_issues.clone();
+        self.search_query = None;
+        if !self.issues.is_empty() {
+            self.list_state.select(Some(0));
+        }
+    }
+
+    /// Load available assignees from GitHub API
+    pub async fn load_assignees(&mut self) {
+        if self.available_assignees.is_empty()
+            && let Ok(assignees) = self.github.list_assignees().await
+        {
+            self.available_assignees = assignees;
+        }
+    }
+
+    /// Get filtered assignee suggestions based on input (fuzzy matching)
+    pub fn get_assignee_suggestions(&self, input: &str) -> Vec<String> {
+        if input.is_empty() {
+            return self.available_assignees.clone();
+        }
+
+        let matcher = SkimMatcherV2::default();
+        let mut scored: Vec<(i64, &String)> = self
+            .available_assignees
+            .iter()
+            .filter_map(|name| matcher.fuzzy_match(name, input).map(|score| (score, name)))
+            .collect();
+
+        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.into_iter().map(|(_, name)| name.clone()).collect()
     }
 
     /// Extract image URLs from issue content
@@ -128,6 +285,30 @@ pub async fn run_issue_browser(
     auto_format: bool,
     llm_endpoint: &str,
 ) -> io::Result<()> {
+    run_issue_browser_with_pagination(
+        issues,
+        github,
+        github_token,
+        auto_format,
+        llm_endpoint,
+        Vec::new(),
+        crate::list::IssueState::Open,
+        false,
+    )
+    .await
+}
+
+/// Run the TUI application with pagination support
+pub async fn run_issue_browser_with_pagination(
+    issues: Vec<IssueSummary>,
+    github: GitHubConfig,
+    github_token: Option<String>,
+    auto_format: bool,
+    llm_endpoint: &str,
+    labels: Vec<String>,
+    state_filter: crate::list::IssueState,
+    has_next_page: bool,
+) -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     // No mouse capture to allow text selection / copy-paste
@@ -135,12 +316,15 @@ pub async fn run_issue_browser(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut browser = IssueBrowser::new(
+    let mut browser = IssueBrowser::with_pagination(
         issues,
         github,
         github_token,
         auto_format,
         llm_endpoint.to_string(),
+        labels,
+        state_filter,
+        has_next_page,
     );
 
     while !browser.should_quit {
@@ -166,6 +350,15 @@ fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
     let image_count = browser.current_images.len();
     match &browser.view {
         TuiView::List => draw_list_view(f, browser),
+        TuiView::Search { input } => {
+            // Split screen: list on top (90%), search input at bottom (10%)
+            let chunks = Layout::vertical([Constraint::Min(3), Constraint::Length(3)])
+                .split(f.area());
+
+            let input_clone = input.clone();
+            draw_list_view_in_area(f, browser, chunks[0]);
+            draw_search_input(f, chunks[1], &input_clone);
+        }
         TuiView::Detail(issue) => {
             draw_detail_view(f, f.area(), issue, browser.scroll_offset, image_count);
         }
@@ -176,6 +369,32 @@ fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
 
             draw_detail_view(f, chunks[0], issue, browser.scroll_offset, image_count);
             draw_comment_input(f, chunks[1], input, browser.status_message.as_deref());
+        }
+        TuiView::ConfirmClose { issue } => {
+            let chunks = Layout::vertical([Constraint::Percentage(80), Constraint::Percentage(20)])
+                .split(f.area());
+
+            draw_detail_view(f, chunks[0], issue, browser.scroll_offset, image_count);
+            draw_confirmation(f, chunks[1], &format!("Close issue #{}? (y/n)", issue.number));
+        }
+        TuiView::ConfirmReopen { issue } => {
+            let chunks = Layout::vertical([Constraint::Percentage(80), Constraint::Percentage(20)])
+                .split(f.area());
+
+            draw_detail_view(f, chunks[0], issue, browser.scroll_offset, image_count);
+            draw_confirmation(f, chunks[1], &format!("Reopen issue #{}? (y/n)", issue.number));
+        }
+        TuiView::AssignUser {
+            issue,
+            input,
+            suggestions,
+            selected,
+        } => {
+            let chunks = Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)])
+                .split(f.area());
+
+            draw_detail_view(f, chunks[0], issue, browser.scroll_offset, image_count);
+            draw_assignee_picker(f, chunks[1], issue, input, suggestions, *selected);
         }
     }
 }
@@ -190,24 +409,72 @@ fn draw_list_view(f: &mut Frame, browser: &mut IssueBrowser) {
             } else {
                 format!(" [{}]", issue.labels.join(", "))
             };
-            let line = Line::from(vec![
-                Span::styled(
-                    format!("#{:<5}", issue.number),
-                    Style::default().fg(Color::Cyan),
-                ),
-                Span::raw(" "),
-                Span::raw(&issue.title),
-                Span::styled(labels_str, Style::default().fg(Color::DarkGray)),
-            ]);
+            let assignees_str = if issue.assignees.is_empty() {
+                String::new()
+            } else {
+                format!(" @{}", issue.assignees.join(", @"))
+            };
+            let is_closed = issue.state == "Closed";
+            let line = if is_closed {
+                // Closed issues are shown in gray with strikethrough effect
+                Line::from(vec![
+                    Span::styled(
+                        format!("#{:<5}", issue.number),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(
+                        " ✓ ",
+                        Style::default().fg(Color::Green),
+                    ),
+                    Span::styled(
+                        &issue.title,
+                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT),
+                    ),
+                    Span::styled(labels_str, Style::default().fg(Color::DarkGray)),
+                    Span::styled(assignees_str, Style::default().fg(Color::DarkGray)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(
+                        format!("#{:<5}", issue.number),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    Span::raw("   "),
+                    Span::raw(&issue.title),
+                    Span::styled(labels_str, Style::default().fg(Color::DarkGray)),
+                    Span::styled(assignees_str, Style::default().fg(Color::Magenta)),
+                ])
+            };
             ListItem::new(line)
         })
         .collect();
+
+    let title = {
+        let mut parts = Vec::new();
+        parts.push("Issues".to_string());
+
+        if let Some(ref query) = browser.search_query {
+            parts.push(format!("(filtered: '{}')", query));
+        }
+
+        if browser.has_next_page {
+            parts.push(format!("[{} loaded, more available]", browser.all_issues.len()));
+        } else if browser.all_issues.len() > 20 {
+            parts.push(format!("[{} total]", browser.all_issues.len()));
+        }
+
+        if browser.is_loading {
+            parts.push("[Loading...]".to_string());
+        }
+
+        format!(" {} │ / search │ c clear │ ↑↓ navigate │ Enter view │ Esc quit ", parts.join(" "))
+    };
 
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Issues (↑↓ navigate, Enter view, Esc quit) "),
+                .title(title),
         )
         .highlight_style(
             Style::default()
@@ -219,6 +486,88 @@ fn draw_list_view(f: &mut Frame, browser: &mut IssueBrowser) {
     f.render_stateful_widget(list, f.area(), &mut browser.list_state);
 }
 
+fn draw_list_view_in_area(f: &mut Frame, browser: &mut IssueBrowser, area: Rect) {
+    let items: Vec<ListItem> = browser
+        .issues
+        .iter()
+        .map(|issue| {
+            let labels_str = if issue.labels.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", issue.labels.join(", "))
+            };
+            let assignees_str = if issue.assignees.is_empty() {
+                String::new()
+            } else {
+                format!(" @{}", issue.assignees.join(", @"))
+            };
+            let is_closed = issue.state == "Closed";
+            let line = if is_closed {
+                Line::from(vec![
+                    Span::styled(
+                        format!("#{:<5}", issue.number),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(" ✓ ", Style::default().fg(Color::Green)),
+                    Span::styled(
+                        &issue.title,
+                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT),
+                    ),
+                    Span::styled(labels_str, Style::default().fg(Color::DarkGray)),
+                    Span::styled(assignees_str, Style::default().fg(Color::DarkGray)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(
+                        format!("#{:<5}", issue.number),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    Span::raw("   "),
+                    Span::raw(&issue.title),
+                    Span::styled(labels_str, Style::default().fg(Color::DarkGray)),
+                    Span::styled(assignees_str, Style::default().fg(Color::Magenta)),
+                ])
+            };
+            ListItem::new(line)
+        })
+        .collect();
+
+    let title = if let Some(ref query) = browser.search_query {
+        format!(" Issues (filtered: '{}') ", query)
+    } else {
+        " Issues ".to_string()
+    };
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▶ ");
+
+    f.render_stateful_widget(list, area, &mut browser.list_state);
+}
+
+fn draw_search_input(f: &mut Frame, area: Rect, input: &str) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Search (Enter confirm, Esc cancel) ")
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let text = format!("/{}", input);
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .style(Style::default().fg(Color::White));
+
+    f.render_widget(paragraph, area);
+}
+
 fn draw_detail_view(
     f: &mut Frame,
     area: Rect,
@@ -226,6 +575,12 @@ fn draw_detail_view(
     scroll: u16,
     image_count: usize,
 ) {
+    let assignees_str = if issue.assignees.is_empty() {
+        "(none)".to_string()
+    } else {
+        issue.assignees.join(", ")
+    };
+
     let mut lines = vec![
         Line::from(vec![
             Span::styled("Title: ", Style::default().add_modifier(Modifier::BOLD)),
@@ -238,6 +593,10 @@ fn draw_detail_view(
         Line::from(vec![
             Span::styled("Labels: ", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(issue.labels.join(", ")),
+        ]),
+        Line::from(vec![
+            Span::styled("Assignees: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(assignees_str, Style::default().fg(Color::Magenta)),
         ]),
         Line::from(""),
         Line::styled("─── Body ───", Style::default().fg(Color::Yellow)),
@@ -279,13 +638,14 @@ fn draw_detail_view(
         }
     }
 
+    let close_key = if issue.state == "Closed" { "X reopen" } else { "x close" };
     let title = if image_count > 0 {
         format!(
-            " #{} │ o open │ c comment │ i/O image [{}/{}] │ ↑↓ scroll │ Esc ",
-            issue.number, 1, image_count
+            " #{} │ o open │ c comment │ a assign │ {} │ i/O image [{}/{}] │ ↑↓ scroll │ Esc ",
+            issue.number, close_key, 1, image_count
         )
     } else {
-        format!(" #{} │ o open │ c comment │ ↑↓ scroll │ Esc ", issue.number)
+        format!(" #{} │ o open │ c comment │ a assign │ {} │ ↑↓ scroll │ Esc ", issue.number, close_key)
     };
 
     let text = Text::from(lines);
@@ -486,6 +846,92 @@ fn draw_comment_input(f: &mut Frame, area: Rect, input: &str, status: Option<&st
     f.render_widget(paragraph, area);
 }
 
+fn draw_confirmation(f: &mut Frame, area: Rect, message: &str) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let paragraph = Paragraph::new(message)
+        .block(block)
+        .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        .alignment(ratatui::layout::Alignment::Center);
+
+    f.render_widget(paragraph, area);
+}
+
+fn draw_assignee_picker(
+    f: &mut Frame,
+    area: Rect,
+    issue: &IssueDetail,
+    input: &str,
+    suggestions: &[String],
+    selected: usize,
+) {
+    // Split into: current assignees (top), input field (middle), suggestions (bottom)
+    let chunks = Layout::vertical([
+        Constraint::Length(3), // Current assignees
+        Constraint::Length(3), // Input field
+        Constraint::Min(3),    // Suggestions list
+    ])
+    .split(area);
+
+    // Current assignees
+    let assignees_text = if issue.assignees.is_empty() {
+        "No assignees".to_string()
+    } else {
+        issue.assignees.join(", ")
+    };
+    let assignees_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Current Assignees (- to unassign) ");
+    let assignees_paragraph = Paragraph::new(assignees_text)
+        .block(assignees_block)
+        .style(Style::default().fg(Color::Cyan));
+    f.render_widget(assignees_paragraph, chunks[0]);
+
+    // Input field
+    let input_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Type to search (Enter assign, Esc cancel) ")
+        .border_style(Style::default().fg(Color::Yellow));
+    let input_text = format!("@{}", input);
+    let input_paragraph = Paragraph::new(input_text)
+        .block(input_block)
+        .style(Style::default().fg(Color::White));
+    f.render_widget(input_paragraph, chunks[1]);
+
+    // Suggestions list
+    let items: Vec<ListItem> = suggestions
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let style = if i == selected {
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            // Mark already assigned users
+            let prefix = if issue.assignees.contains(name) {
+                "✓ "
+            } else {
+                "  "
+            };
+            ListItem::new(Line::from(format!("{}{}", prefix, name))).style(style)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Suggestions "))
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        );
+    f.render_widget(list, chunks[2]);
+}
+
 fn format_date(date_str: &str) -> String {
     // Simple date formatting: take first 10 chars if available
     if date_str.len() >= 10 {
@@ -499,7 +945,15 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
     match &mut browser.view {
         TuiView::List => match key {
             KeyCode::Esc | KeyCode::Char('q') => browser.should_quit = true,
-            KeyCode::Down | KeyCode::Char('j') => browser.next(),
+            KeyCode::Down | KeyCode::Char('j') => {
+                browser.next();
+                // Check if we need to load more issues
+                if let Some(selected) = browser.list_state.selected() {
+                    if browser.has_next_page && selected >= browser.issues.len().saturating_sub(5) {
+                        browser.load_next_page().await;
+                    }
+                }
+            }
             KeyCode::Up | KeyCode::Char('k') => browser.previous(),
             KeyCode::Enter => {
                 if let Some(issue) = browser.selected_issue() {
@@ -511,8 +965,43 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                     }
                 }
             }
+            KeyCode::Char('/') => {
+                // Enter search mode
+                browser.view = TuiView::Search { input: String::new() };
+            }
+            KeyCode::Char('c') => {
+                // Clear search filter
+                browser.clear_search();
+                browser.status_message = Some("Filter cleared".to_string());
+            }
             _ => {}
         },
+        TuiView::Search { input } => {
+            match key {
+                KeyCode::Esc => {
+                    // Cancel search, return to list
+                    browser.view = TuiView::List;
+                }
+                KeyCode::Enter => {
+                    // Apply search filter and return to list
+                    browser.view = TuiView::List;
+                }
+                KeyCode::Backspace => {
+                    input.pop();
+                }
+                KeyCode::Char(c) => {
+                    input.push(c);
+                }
+                _ => {}
+            }
+            // Apply filter after processing key (unless we're leaving search mode)
+            if matches!(browser.view, TuiView::Search { .. }) {
+                if let TuiView::Search { input } = &browser.view {
+                    let query = input.clone();
+                    browser.apply_search_filter(&query);
+                }
+            }
+        }
         TuiView::Detail(issue) => match key {
             KeyCode::Esc | KeyCode::Char('q') => {
                 browser.view = TuiView::List;
@@ -563,6 +1052,36 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                 } else {
                     browser.status_message = Some("No images in this issue".to_string());
                 }
+            }
+            KeyCode::Char('x') => {
+                // Close issue confirmation (only if open)
+                if issue.state == "Open" {
+                    let issue_clone = issue.clone();
+                    browser.view = TuiView::ConfirmClose { issue: issue_clone };
+                } else {
+                    browser.status_message = Some("Issue is already closed".to_string());
+                }
+            }
+            KeyCode::Char('X') => {
+                // Reopen issue confirmation (only if closed)
+                if issue.state == "Closed" {
+                    let issue_clone = issue.clone();
+                    browser.view = TuiView::ConfirmReopen { issue: issue_clone };
+                } else {
+                    browser.status_message = Some("Issue is already open".to_string());
+                }
+            }
+            KeyCode::Char('a') => {
+                // Open assignee picker - clone issue first to avoid borrow issues
+                let issue_clone = issue.clone();
+                browser.load_assignees().await;
+                let suggestions = browser.get_assignee_suggestions("");
+                browser.view = TuiView::AssignUser {
+                    issue: issue_clone,
+                    input: String::new(),
+                    suggestions,
+                    selected: 0,
+                };
             }
             _ => {}
         },
@@ -615,6 +1134,205 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
             }
             _ => {}
         },
+        TuiView::ConfirmClose { issue } => match key {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let number = issue.number;
+                if browser.github.close_issue(number).await.is_ok() {
+                    browser.status_message = Some(format!("Issue #{} closed", number));
+                    // Remove from list or update state
+                    if let Some(pos) = browser.issues.iter().position(|i| i.number == number) {
+                        browser.issues[pos].state = "Closed".to_string();
+                    }
+                    browser.view = TuiView::List;
+                } else {
+                    browser.status_message = Some("Failed to close issue".to_string());
+                    // Return to detail view
+                    if let Ok(detail) = browser.github.get_issue(number).await {
+                        browser.view = TuiView::Detail(detail);
+                    } else {
+                        browser.view = TuiView::List;
+                    }
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                let number = issue.number;
+                if let Ok(detail) = browser.github.get_issue(number).await {
+                    browser.view = TuiView::Detail(detail);
+                } else {
+                    browser.view = TuiView::List;
+                }
+            }
+            _ => {}
+        },
+        TuiView::ConfirmReopen { issue } => match key {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let number = issue.number;
+                if browser.github.reopen_issue(number).await.is_ok() {
+                    browser.status_message = Some(format!("Issue #{} reopened", number));
+                    // Update state in list
+                    if let Some(pos) = browser.issues.iter().position(|i| i.number == number) {
+                        browser.issues[pos].state = "Open".to_string();
+                    }
+                    // Reload and show updated issue
+                    if let Ok(detail) = browser.github.get_issue(number).await {
+                        browser.view = TuiView::Detail(detail);
+                    } else {
+                        browser.view = TuiView::List;
+                    }
+                } else {
+                    browser.status_message = Some("Failed to reopen issue".to_string());
+                    if let Ok(detail) = browser.github.get_issue(number).await {
+                        browser.view = TuiView::Detail(detail);
+                    } else {
+                        browser.view = TuiView::List;
+                    }
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                let number = issue.number;
+                if let Ok(detail) = browser.github.get_issue(number).await {
+                    browser.view = TuiView::Detail(detail);
+                } else {
+                    browser.view = TuiView::List;
+                }
+            }
+            _ => {}
+        },
+        TuiView::AssignUser {
+            issue,
+            input,
+            suggestions,
+            selected,
+        } => {
+            // Extract data we need before modifying browser
+            let number = issue.number;
+            let current_assignees = issue.assignees.clone();
+            let input_str = input.clone();
+            let sel = *selected;
+
+            match key {
+                KeyCode::Esc => {
+                    if let Ok(detail) = browser.github.get_issue(number).await {
+                        browser.view = TuiView::Detail(detail);
+                    } else {
+                        browser.view = TuiView::List;
+                    }
+                }
+                KeyCode::Up => {
+                    if let TuiView::AssignUser { selected, .. } = &mut browser.view
+                        && *selected > 0
+                    {
+                        *selected -= 1;
+                    }
+                }
+                KeyCode::Down => {
+                    let sugg_len = suggestions.len();
+                    if let TuiView::AssignUser { selected, .. } = &mut browser.view
+                        && *selected < sugg_len.saturating_sub(1)
+                    {
+                        *selected += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    // Assign selected user
+                    if let Some(user) = suggestions.get(sel) {
+                        let user_to_assign = user.clone();
+
+                        // Check if already assigned
+                        if current_assignees.contains(&user_to_assign) {
+                            browser.status_message = Some(format!("{} is already assigned", user_to_assign));
+                        } else if browser
+                            .github
+                            .assign_issue(number, std::slice::from_ref(&user_to_assign))
+                            .await
+                            .is_ok()
+                        {
+                            browser.status_message = Some(format!("Assigned {} to #{}", user_to_assign, number));
+                            // Update the issue in list
+                            if let Some(pos) = browser.issues.iter().position(|i| i.number == number) {
+                                browser.issues[pos].assignees.push(user_to_assign);
+                            }
+                        } else {
+                            browser.status_message = Some("Failed to assign user".to_string());
+                        }
+
+                        // Reload and return to detail view
+                        if let Ok(detail) = browser.github.get_issue(number).await {
+                            browser.view = TuiView::Detail(detail);
+                        } else {
+                            browser.view = TuiView::List;
+                        }
+                    }
+                }
+                KeyCode::Char('-') => {
+                    // Unassign: remove first current assignee
+                    if !current_assignees.is_empty() {
+                        let user_to_remove = current_assignees[0].clone();
+
+                        if browser
+                            .github
+                            .unassign_issue(number, std::slice::from_ref(&user_to_remove))
+                            .await
+                            .is_ok()
+                        {
+                            browser.status_message = Some(format!("Unassigned {} from #{}", user_to_remove, number));
+                            // Update the issue in list
+                            if let Some(pos) = browser.issues.iter().position(|i| i.number == number) {
+                                browser.issues[pos].assignees.retain(|u| u != &user_to_remove);
+                            }
+                        } else {
+                            browser.status_message = Some("Failed to unassign user".to_string());
+                        }
+
+                        // Reload and stay in assign view
+                        if let Ok(detail) = browser.github.get_issue(number).await {
+                            let new_suggestions = browser.get_assignee_suggestions(&input_str);
+                            browser.view = TuiView::AssignUser {
+                                issue: detail,
+                                input: input_str,
+                                suggestions: new_suggestions,
+                                selected: 0,
+                            };
+                        } else {
+                            browser.view = TuiView::List;
+                        }
+                    }
+                }
+                KeyCode::Backspace => {
+                    let mut new_input = input_str.clone();
+                    new_input.pop();
+                    let new_suggestions = browser.get_assignee_suggestions(&new_input);
+                    if let TuiView::AssignUser {
+                        input: ref mut inp,
+                        suggestions: ref mut sug,
+                        selected: ref mut sel,
+                        ..
+                    } = browser.view
+                    {
+                        *inp = new_input;
+                        *sug = new_suggestions;
+                        *sel = 0;
+                    }
+                }
+                KeyCode::Char(c) => {
+                    let mut new_input = input_str.clone();
+                    new_input.push(c);
+                    let new_suggestions = browser.get_assignee_suggestions(&new_input);
+                    if let TuiView::AssignUser {
+                        input: ref mut inp,
+                        suggestions: ref mut sug,
+                        selected: ref mut sel,
+                        ..
+                    } = browser.view
+                    {
+                        *inp = new_input;
+                        *sug = new_suggestions;
+                        *sel = 0;
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }
 
@@ -837,5 +1555,35 @@ mod tests {
             render_inline_markdown("**first** and **second**"),
             "first and second"
         );
+    }
+
+    #[test]
+    fn fuzzy_match_assignees_exact() {
+        let matcher = SkimMatcherV2::default();
+        // Exact match should have high score
+        assert!(matcher.fuzzy_match("alice", "alice").is_some());
+    }
+
+    #[test]
+    fn fuzzy_match_assignees_partial() {
+        let matcher = SkimMatcherV2::default();
+        // Partial match should work
+        assert!(matcher.fuzzy_match("alice", "ali").is_some());
+        assert!(matcher.fuzzy_match("bob_smith", "bob").is_some());
+    }
+
+    #[test]
+    fn fuzzy_match_assignees_no_match() {
+        let matcher = SkimMatcherV2::default();
+        // Completely different strings shouldn't match
+        assert!(matcher.fuzzy_match("alice", "xyz").is_none());
+    }
+
+    #[test]
+    fn fuzzy_match_assignees_case_insensitive() {
+        let matcher = SkimMatcherV2::default();
+        // Should match regardless of case
+        assert!(matcher.fuzzy_match("Alice", "alice").is_some());
+        assert!(matcher.fuzzy_match("BOB", "bob").is_some());
     }
 }

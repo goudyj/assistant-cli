@@ -2,6 +2,7 @@ use assistant::auth::{self, DeviceFlowAuth};
 use assistant::config::{self, Config, ProjectConfig};
 use assistant::github::GitHubConfig;
 use assistant::issues::{self, IssueContent};
+use assistant::list::{IssueState, ListOptions};
 use assistant::llm;
 use assistant::tui;
 use crossterm::{
@@ -32,6 +33,7 @@ const STATIC_COMMANDS: &[&str] = &[
     "/logout",
     "/repository",
     "/repo",
+    "/list",
     "/issue",
     "/ok",
     "/help",
@@ -210,6 +212,10 @@ async fn main() {
 
                 "/repository" | "/repo" => {
                     handle_repository_command(rest, &mut state, &dynamic_commands_ref);
+                }
+
+                "/list" => {
+                    handle_list_with_options(rest, &state).await;
                 }
 
                 "/issue" => {
@@ -443,6 +449,100 @@ async fn handle_issue_command(description: &str, state: &mut AppState) {
     }
 }
 
+async fn handle_list_with_options(args: &str, state: &AppState) {
+    let Some(ref project) = state.current_project else {
+        print_colored_message("No project selected. Use /repository <name> first.\n", Color::DarkYellow);
+        return;
+    };
+
+    let Some(ref token) = state.cached_token else {
+        print_colored_message("Not authenticated. Use /login first.\n", Color::Red);
+        return;
+    };
+
+    // Parse options using known labels from project config
+    let options = ListOptions::parse(args, &project.labels);
+
+    let github = GitHubConfig::new(project.owner.clone(), project.repo.clone(), token.clone());
+    let github_token = state.cached_token.clone();
+
+    let state_str = match options.state {
+        IssueState::Open => "open",
+        IssueState::Closed => "closed",
+        IssueState::All => "all",
+    };
+
+    if options.labels.is_empty() && options.search.is_none() {
+        print_colored_message(&format!("Fetching {} issues...\n", state_str), Color::DarkMagenta);
+    } else {
+        let filter_desc = if !options.labels.is_empty() {
+            format!("labels: {}", options.labels.join(", "))
+        } else {
+            String::new()
+        };
+        let search_desc = options.search.as_ref().map(|s| format!("search: '{}'", s)).unwrap_or_default();
+        let desc = [filter_desc, search_desc].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(", ");
+        print_colored_message(&format!("Fetching {} issues ({})...\n", state_str, desc), Color::DarkMagenta);
+    }
+
+    match github.list_issues_paginated(&options.labels, &options.state, 20, 1).await {
+        Ok((mut issues, has_next_page)) => {
+            // Apply local search filter if specified
+            if let Some(ref query) = options.search {
+                issues.retain(|issue| matches_query(issue, query));
+            }
+
+            if issues.is_empty() {
+                print_colored_message("No issues found matching criteria.\n", Color::DarkYellow);
+                return;
+            }
+
+            let auto_format = state
+                .config
+                .as_ref()
+                .map(|c| c.auto_format_comments)
+                .unwrap_or(false);
+
+            if let Err(e) =
+                tui::run_issue_browser_with_pagination(
+                    issues,
+                    github,
+                    github_token,
+                    auto_format,
+                    &llm::default_endpoint(),
+                    options.labels.clone(),
+                    options.state.clone(),
+                    has_next_page,
+                ).await
+            {
+                print_colored_message(&format!("TUI error: {}\n", e), Color::Red);
+            }
+        }
+        Err(e) => {
+            print_colored_message(&format!("Failed to fetch issues: {}\n", e), Color::Red);
+        }
+    }
+}
+
+/// Check if an issue matches a search query (case-insensitive)
+fn matches_query(issue: &assistant::github::IssueSummary, query: &str) -> bool {
+    let query_lower = query.to_lowercase();
+
+    // Search in title
+    if issue.title.to_lowercase().contains(&query_lower) {
+        return true;
+    }
+
+    // Search in labels
+    for label in &issue.labels {
+        if label.to_lowercase().contains(&query_lower) {
+            return true;
+        }
+    }
+
+    false
+}
+
 async fn handle_list_command(labels: Vec<String>, state: &AppState) {
     let Some(ref project) = state.current_project else {
         print_colored_message("No project selected.\n", Color::DarkYellow);
@@ -461,7 +561,7 @@ async fn handle_list_command(labels: Vec<String>, state: &AppState) {
 
     print_colored_message("Fetching issues...\n", Color::DarkMagenta);
 
-    match github.list_issues(&labels, 20).await {
+    match github.list_issues(&labels, &IssueState::Open, 20).await {
         Ok(issues) => {
             if issues.is_empty() {
                 print_colored_message("No issues found with those labels.\n", Color::DarkYellow);
@@ -526,6 +626,7 @@ fn print_help(state: &AppState) {
         help.push_str("  /login              - Authenticate with GitHub\n");
         help.push_str("  /logout             - Remove GitHub authentication\n");
         help.push_str("  /repository <name>  - Select a project from config\n");
+        help.push_str("  /list [options]     - List issues (use --state=closed, labels, search)\n");
         help.push_str("  /issue <desc>       - Generate an issue from description\n");
         help.push_str("  /ok                 - Create the issue on GitHub\n");
         help.push_str("  /quit               - Exit\n");
