@@ -171,6 +171,46 @@ pub fn kill_tmux_session(session_name: &str) -> Result<(), AgentError> {
     Ok(())
 }
 
+/// Capture the content of a tmux pane.
+fn capture_tmux_pane(session_name: &str) -> Option<String> {
+    let output = Command::new("tmux")
+        .args(["capture-pane", "-t", session_name, "-p", "-S", "-50"])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        Some(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        None
+    }
+}
+
+/// Check if Claude Code is idle (waiting for input).
+/// Returns true if the last lines indicate Claude is waiting for user input.
+fn is_claude_idle(pane_content: &str) -> bool {
+    let lines: Vec<&str> = pane_content.lines().collect();
+    let last_lines: Vec<&str> = lines.iter().rev().take(10).copied().collect();
+
+    // Claude Code shows ">" prompt when waiting for input
+    // Also check for common idle patterns
+    for line in &last_lines {
+        let trimmed = line.trim();
+        // Empty line followed by prompt indicator
+        if trimmed == ">" || trimmed.ends_with("> ") {
+            return true;
+        }
+        // Check for "waiting" or completion indicators
+        if trimmed.contains("What would you like")
+            || trimmed.contains("Is there anything else")
+            || trimmed.contains("Let me know if")
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Start a monitoring thread for the tmux session.
 fn start_tmux_monitoring(
     session_id: String,
@@ -178,6 +218,9 @@ fn start_tmux_monitoring(
     worktree_path: std::path::PathBuf,
 ) {
     thread::spawn(move || {
+        let mut was_idle = false;
+        let mut idle_notified = false;
+
         loop {
             thread::sleep(Duration::from_secs(5));
 
@@ -190,6 +233,9 @@ fn start_tmux_monitoring(
                 lines_deleted,
                 files_changed,
             };
+
+            // Keep a copy for notification message
+            let stats_copy = stats.clone();
 
             // Update session
             let mut manager = SessionManager::load();
@@ -213,6 +259,32 @@ fn start_tmux_monitoring(
                 }
 
                 break;
+            }
+
+            // Check if Claude is idle (task completed)
+            if !idle_notified {
+                if let Some(pane_content) = capture_tmux_pane(&tmux_name) {
+                    let is_idle = is_claude_idle(&pane_content);
+
+                    // Only notify if Claude just became idle (was working before)
+                    if is_idle && !was_idle {
+                        // Send notification that task is complete
+                        let manager = SessionManager::load();
+                        if let Some(session) = manager.get(&session_id) {
+                            let title = "Claude Code";
+                            let message = format!(
+                                "Task completed for issue #{} (+{} -{})",
+                                session.issue_number,
+                                stats_copy.lines_added,
+                                stats_copy.lines_deleted
+                            );
+                            send_notification(title, &message);
+                        }
+                        idle_notified = true;
+                    }
+
+                    was_idle = is_idle;
+                }
             }
         }
     });
