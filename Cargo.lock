@@ -161,6 +161,7 @@ dependencies = [
 name = "assistant"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "clap",
  "crossterm",
  "dialoguer",
@@ -181,6 +182,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "uuid",
  "wiremock",
 ]
 

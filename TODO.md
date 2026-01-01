@@ -242,11 +242,11 @@ pub enum AgentStatus {
 ```
 
 #### 5.2.2 Gestion des sessions
-- [ ] Fichier de sessions: `~/.cache/assistant/sessions.json`
-- [ ] `fn list_sessions() -> Vec<AgentSession>`
-- [ ] `fn get_session(id: &str) -> Option<AgentSession>`
-- [ ] `fn update_session_status(id: &str, status: AgentStatus)`
-- [ ] `fn cleanup_old_sessions(days: u32)` - supprime les vieilles sessions
+- [x] Fichier de sessions: `~/.cache/assistant/sessions.json`
+- [x] `fn list_sessions() -> Vec<AgentSession>`
+- [x] `fn get_session(id: &str) -> Option<AgentSession>`
+- [x] `fn update_session_status(id: &str, status: AgentStatus)`
+- [x] `fn cleanup_old_sessions(days: u32)` - supprime les vieilles sessions
 
 ### 5.3 Module `src/agents/claude.rs`
 
@@ -270,10 +270,10 @@ git -C <local_path> worktree add ~/.cache/assistant/worktrees/project-123 issue-
 ```
 
 **Implémentation:**
-- [ ] `fn create_worktree(local_path, issue_number) -> Result<PathBuf>`
-- [ ] `fn remove_worktree(worktree_path) -> Result<()>`
-- [ ] Ajouter `worktree_path: PathBuf` dans `AgentSession`
-- [ ] Cleanup automatique des vieux worktrees (après X jours ou manuellement)
+- [x] `fn create_worktree(local_path, issue_number) -> Result<PathBuf>`
+- [x] `fn remove_worktree(worktree_path) -> Result<()>`
+- [x] Ajouter `worktree_path: PathBuf` dans `AgentSession`
+- [x] Cleanup automatique des vieux worktrees (après X jours ou manuellement)
 
 #### 5.3.2 Lancement de Claude Code
 ```rust
@@ -283,18 +283,18 @@ pub async fn dispatch_to_claude(
 ) -> Result<AgentSession, AgentError>
 ```
 
-- [ ] Créer le worktree pour l'issue
-- [ ] Construire le prompt: `"Fix GitHub issue #{number}: {title}\n\n{body}"`
-- [ ] Commande: `claude -p "<prompt>"`
-- [ ] Working directory: le worktree (pas `local_path`)
-- [ ] Rediriger stdout/stderr vers le fichier de log
-- [ ] Lancer en background avec `std::process::Command`
-- [ ] Retourner immédiatement avec `AgentSession`
+- [x] Créer le worktree pour l'issue
+- [x] Construire le prompt: `"Fix GitHub issue #{number}: {title}\n\n{body}"`
+- [x] Commande: `claude -p "<prompt>"`
+- [x] Working directory: le worktree (pas `local_path`)
+- [x] Rediriger stdout/stderr vers le fichier de log
+- [x] Lancer en background avec `std::process::Command`
+- [x] Retourner immédiatement avec `AgentSession`
 
 #### 5.3.3 Monitoring du processus
-- [ ] Thread/task de monitoring qui poll le processus
-- [ ] Compter les lignes de sortie en temps réel
-- [ ] **Git diff périodique** (toutes les 5s) pour stats de code:
+- [x] Thread/task de monitoring qui poll le processus
+- [x] Compter les lignes de sortie en temps réel
+- [x] **Git diff périodique** (toutes les 5s) pour stats de code:
   ```rust
   pub struct AgentStats {
       pub lines_output: usize,    // Lignes dans le log Claude
@@ -303,20 +303,20 @@ pub async fn dispatch_to_claude(
       pub files_changed: usize,
   }
   ```
-- [ ] Détecter la fin du processus
-- [ ] Mettre à jour le statut dans `sessions.json`
-- [ ] Envoyer notification macOS à la fin
+- [x] Détecter la fin du processus
+- [x] Mettre à jour le statut dans `sessions.json`
+- [x] Envoyer notification macOS à la fin
 
 #### 5.3.4 Actions post-completion
-- [ ] Option "Create PR" → `gh pr create` depuis la branche du worktree
+- [x] Option "Create PR" → `gh pr create` depuis la branche du worktree
 - [ ] Option "View diff" → afficher le diff dans le TUI
 - [ ] Option "Cleanup" → supprimer le worktree et la branche
-- [ ] Option "Open in editor" → ouvrir le worktree dans VS Code/editor
+- [x] Option "Open in editor" → ouvrir le worktree dans VS Code/editor
 
 ### 5.4 Notifications macOS
 
-- [ ] Utiliser `osascript` ou crate `notify-rust`
-- [ ] À la fin: "Claude Code finished issue #123"
+- [x] Utiliser `osascript` ou crate `notify-rust`
+- [x] À la fin: "Claude Code finished issue #123"
 - [ ] Clic sur notification → ouvre le log ou le TUI
 
 ```rust
@@ -334,9 +334,9 @@ fn send_macos_notification(title: &str, message: &str) {
 ### 5.5 Interface TUI
 
 #### 5.5.1 Dispatch depuis la vue détail
-- [ ] Touche `d` pour dispatcher l'issue à Claude Code
-- [ ] Confirmation: "Dispatch #123 to Claude Code? (y/n)"
-- [ ] Message: "Agent started. View status with /agents"
+- [x] Touche `d` pour dispatcher l'issue à Claude Code
+- [x] Confirmation: "Dispatch #123 to Claude Code? (y/n)"
+- [x] Message: "Agent started. View status with /agents"
 
 #### 5.5.2 Multi-select dans la vue liste
 - [ ] Touche `Space` pour sélectionner/désélectionner une issue
@@ -345,10 +345,10 @@ fn send_macos_notification(title: &str, message: &str) {
 - [ ] Lancement en parallèle (une instance Claude Code par issue)
 
 #### 5.5.3 Vue des sessions actives
-- [ ] Commande `/agents` ou touche `A` dans le TUI
-- [ ] Nouvelle vue `TuiView::AgentList`
-- [ ] Afficher: issue #, titre, statut, lignes output, durée
-- [ ] Navigation: `Enter` pour voir les logs, `k` pour kill un agent
+- [x] Commande `/agents` ou touche `A` dans le TUI
+- [x] Nouvelle vue `TuiView::AgentList`
+- [x] Afficher: issue #, titre, statut, lignes output, durée
+- [x] Navigation: `Enter` pour voir les logs, `K` pour kill un agent
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -366,36 +366,36 @@ fn send_macos_notification(title: &str, message: &str) {
 - `[PR]` : PR créée depuis cette session
 
 #### 5.5.4 Vue des logs
-- [ ] Nouvelle vue `TuiView::AgentLogs { session_id }`
-- [ ] Afficher le contenu du fichier de log
-- [ ] Scroll avec j/k
+- [x] Nouvelle vue `TuiView::AgentLogs { session_id }`
+- [x] Afficher le contenu du fichier de log
+- [x] Scroll avec j/k
 - [ ] Refresh automatique si l'agent est encore en cours
-- [ ] `q` pour revenir à la liste des agents
+- [x] `q` pour revenir à la liste des agents
 
 ### 5.6 Commande CLI `/agents`
 
-- [ ] `/agents` - Ouvre la vue des sessions actives
-- [ ] `/agents list` - Liste les sessions en mode texte
-- [ ] `/agents logs <id>` - Affiche les logs d'une session
-- [ ] `/agents kill <id>` - Termine un agent en cours
-- [ ] `/agents clean` - Supprime les vieilles sessions
+- [x] `/agents` - Ouvre la vue des sessions actives
+- [x] `/agents list` - Liste les sessions en mode texte
+- [x] `/agents logs <id>` - Affiche les logs d'une session
+- [x] `/agents kill <id>` - Termine un agent en cours
+- [x] `/agents clean` - Supprime les vieilles sessions
 
 ### 5.7 Fichiers à créer/modifier
 
 **Nouveaux fichiers:**
-- [ ] `src/agents/mod.rs`: Module principal, structures
-- [ ] `src/agents/claude.rs`: Intégration Claude Code
-- [ ] `src/agents/session.rs`: Gestion des sessions
+- [x] `src/agents/mod.rs`: Module principal, structures
+- [x] `src/agents/claude.rs`: Intégration Claude Code
+- [x] `src/agents/session.rs`: Gestion des sessions
 
 **Fichiers à modifier:**
-- [ ] `src/config.rs`: Ajouter `local_path` à `ProjectConfig`
-- [ ] `src/tui.rs`: Nouvelles vues (AgentList, AgentLogs), multi-select
-- [ ] `src/main.rs`: Commande `/agents`
-- [ ] `src/lib.rs`: Exposer le module `agents`
+- [x] `src/config.rs`: Ajouter `local_path` à `ProjectConfig`
+- [x] `src/tui.rs`: Nouvelles vues (AgentList, AgentLogs), multi-select
+- [x] `src/main.rs`: Commande `/agents`
+- [x] `src/lib.rs`: Exposer le module `agents`
 
 ### 5.8 Dépendances à ajouter
-- [ ] `uuid` pour les IDs de session
-- [ ] `chrono` pour les timestamps
+- [x] `uuid` pour les IDs de session
+- [x] `chrono` pour les timestamps
 
 ### 5.9 Tests à écrire
 - [ ] Test `create_worktree()` - crée bien la branche et le worktree

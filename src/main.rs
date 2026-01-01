@@ -1,3 +1,4 @@
+use assistant::agents::{kill_agent, SessionManager};
 use assistant::auth::{self, DeviceFlowAuth};
 use assistant::config::{self, Config, ProjectConfig};
 use assistant::github::GitHubConfig;
@@ -36,6 +37,7 @@ const STATIC_COMMANDS: &[&str] = &[
     "/list",
     "/issue",
     "/ok",
+    "/agents",
     "/help",
     "/quit",
     "/exit",
@@ -232,6 +234,10 @@ async fn main() {
 
                 "/help" => {
                     print_help(&state);
+                }
+
+                "/agents" => {
+                    handle_agents_command(rest, &state).await;
                 }
 
                 _ => {
@@ -629,6 +635,7 @@ fn print_help(state: &AppState) {
         help.push_str("  /list [options]     - List issues (use --state=closed, labels, search)\n");
         help.push_str("  /issue <desc>       - Generate an issue from description\n");
         help.push_str("  /ok                 - Create the issue on GitHub\n");
+        help.push_str("  /agents             - View agent sessions (Claude Code)\n");
         help.push_str("  /quit               - Exit\n");
 
         if let Some(ref project) = state.current_project {
@@ -681,6 +688,184 @@ fn print_issue(issue: &IssueContent) {
         ),
         Color::DarkYellow,
     );
+}
+
+async fn handle_agents_command(args: &str, state: &AppState) {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let subcommand = parts.first().copied().unwrap_or("");
+    let rest = parts.get(1..).unwrap_or(&[]).join(" ");
+
+    match subcommand {
+        "" => {
+            // Open the TUI agent list view
+            let Some(ref project) = state.current_project else {
+                print_colored_message("No project selected. Use /repository <name> first.\n", Color::DarkYellow);
+                return;
+            };
+
+            let Some(ref token) = state.cached_token else {
+                print_colored_message("Not authenticated. Use /login first.\n", Color::Red);
+                return;
+            };
+
+            let github = GitHubConfig::new(project.owner.clone(), project.repo.clone(), token.clone());
+            let github_token = state.cached_token.clone();
+
+            let auto_format = state
+                .config
+                .as_ref()
+                .map(|c| c.auto_format_comments)
+                .unwrap_or(false);
+
+            // Show agent list in TUI
+            if let Err(e) = tui::run_agent_browser(github, github_token, auto_format, &llm::default_endpoint()).await {
+                print_colored_message(&format!("TUI error: {}\n", e), Color::Red);
+            }
+        }
+
+        "list" => {
+            // List sessions in text mode
+            let manager = SessionManager::load();
+            let sessions = manager.list();
+
+            if sessions.is_empty() {
+                print_colored_message("No agent sessions.\n", Color::DarkMagenta);
+                return;
+            }
+
+            print_colored_message("Agent sessions:\n", Color::Cyan);
+            for session in sessions {
+                let status = match &session.status {
+                    assistant::agents::AgentStatus::Running => "Running".to_string(),
+                    assistant::agents::AgentStatus::Completed { exit_code } => format!("Completed ({})", exit_code),
+                    assistant::agents::AgentStatus::Failed { error } => format!("Failed: {}", error),
+                };
+                let stats = format!("+{} -{} {} files",
+                    session.stats.lines_added,
+                    session.stats.lines_deleted,
+                    session.stats.files_changed
+                );
+                let pr = session.pr_url.as_ref().map(|_| " [PR]").unwrap_or("");
+
+                print_colored_message(
+                    &format!(
+                        "  {} #{} {} - {} {} {}{}\n",
+                        &session.id[..8],
+                        session.issue_number,
+                        session.issue_title,
+                        status,
+                        stats,
+                        session.duration_str(),
+                        pr
+                    ),
+                    if session.is_running() { Color::Green } else { Color::White },
+                );
+            }
+        }
+
+        "logs" => {
+            // Show logs for a session
+            if rest.is_empty() {
+                print_colored_message("Usage: /agents logs <session-id>\n", Color::DarkMagenta);
+                return;
+            }
+
+            let manager = SessionManager::load();
+            let session_id = &rest;
+
+            // Find session by prefix match
+            let session = manager.list().iter().find(|s| s.id.starts_with(session_id));
+
+            match session {
+                Some(session) => {
+                    if session.log_file.exists() {
+                        match std::fs::read_to_string(&session.log_file) {
+                            Ok(content) => {
+                                print_colored_message(
+                                    &format!("--- Logs for session {} (issue #{}) ---\n", &session.id[..8], session.issue_number),
+                                    Color::Cyan,
+                                );
+                                println!("{}", content);
+                                print_colored_message("--- End of logs ---\n", Color::Cyan);
+                            }
+                            Err(e) => {
+                                print_colored_message(&format!("Failed to read logs: {}\n", e), Color::Red);
+                            }
+                        }
+                    } else {
+                        print_colored_message("Log file not found.\n", Color::DarkYellow);
+                    }
+                }
+                None => {
+                    print_colored_message(&format!("Session '{}' not found.\n", session_id), Color::DarkYellow);
+                }
+            }
+        }
+
+        "kill" => {
+            // Kill an agent
+            if rest.is_empty() {
+                print_colored_message("Usage: /agents kill <session-id>\n", Color::DarkMagenta);
+                return;
+            }
+
+            let manager = SessionManager::load();
+            let session_id = &rest;
+
+            // Find session by prefix match
+            let session = manager.list().iter().find(|s| s.id.starts_with(session_id));
+
+            match session {
+                Some(session) => {
+                    if session.is_running() {
+                        match kill_agent(&session.id) {
+                            Ok(()) => {
+                                print_colored_message(
+                                    &format!("Killed agent {} (issue #{})\n", &session.id[..8], session.issue_number),
+                                    Color::Green,
+                                );
+                            }
+                            Err(e) => {
+                                print_colored_message(&format!("Failed to kill agent: {}\n", e), Color::Red);
+                            }
+                        }
+                    } else {
+                        print_colored_message("Agent is not running.\n", Color::DarkYellow);
+                    }
+                }
+                None => {
+                    print_colored_message(&format!("Session '{}' not found.\n", session_id), Color::DarkYellow);
+                }
+            }
+        }
+
+        "clean" => {
+            // Clean old sessions
+            let mut manager = SessionManager::load();
+            let before = manager.list().len();
+            manager.cleanup_old_sessions(7);
+            let after = manager.list().len();
+
+            if let Err(e) = manager.save() {
+                print_colored_message(&format!("Failed to save sessions: {}\n", e), Color::Red);
+                return;
+            }
+
+            let removed = before - after;
+            if removed > 0 {
+                print_colored_message(&format!("Cleaned {} old sessions.\n", removed), Color::Green);
+            } else {
+                print_colored_message("No old sessions to clean.\n", Color::DarkMagenta);
+            }
+        }
+
+        _ => {
+            print_colored_message(
+                "Usage: /agents [list|logs <id>|kill <id>|clean]\n",
+                Color::DarkMagenta,
+            );
+        }
+    }
 }
 
 async fn handle_feedback(

@@ -34,6 +34,16 @@ pub enum TuiView {
         suggestions: Vec<String>,
         selected: usize,
     },
+    ConfirmDispatch { issue: IssueDetail },
+    AgentList {
+        sessions: Vec<crate::agents::AgentSession>,
+        selected: usize,
+    },
+    AgentLogs {
+        session_id: String,
+        content: String,
+        scroll: u16,
+    },
 }
 
 /// Main TUI state
@@ -60,6 +70,9 @@ pub struct IssueBrowser {
     pub list_state_filter: crate::list::IssueState,
     // Assignees cache
     pub available_assignees: Vec<String>,
+    // Project info for Claude Code dispatch
+    pub project_name: Option<String>,
+    pub local_path: Option<std::path::PathBuf>,
 }
 
 impl IssueBrowser {
@@ -117,7 +130,15 @@ impl IssueBrowser {
             list_labels,
             list_state_filter,
             available_assignees: Vec::new(),
+            project_name: None,
+            local_path: None,
         }
+    }
+
+    /// Set project info for Claude Code dispatch
+    pub fn set_project_info(&mut self, name: String, path: std::path::PathBuf) {
+        self.project_name = Some(name);
+        self.local_path = Some(path);
     }
 
     /// Load the next page of issues
@@ -346,6 +367,59 @@ pub async fn run_issue_browser_with_pagination(
     Ok(())
 }
 
+/// Run the TUI application starting with the agent list view
+pub async fn run_agent_browser(
+    github: GitHubConfig,
+    github_token: Option<String>,
+    auto_format: bool,
+    llm_endpoint: &str,
+) -> io::Result<()> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    // Load sessions and start with AgentList view
+    let manager = crate::agents::SessionManager::load();
+    let sessions_list: Vec<_> = manager.list().to_vec();
+
+    let mut browser = IssueBrowser::with_pagination(
+        Vec::new(),
+        github,
+        github_token,
+        auto_format,
+        llm_endpoint.to_string(),
+        Vec::new(),
+        crate::list::IssueState::Open,
+        false,
+    );
+
+    // Start at agent list view
+    browser.view = TuiView::AgentList {
+        sessions: sessions_list,
+        selected: 0,
+    };
+
+    while !browser.should_quit {
+        terminal.draw(|f| draw_ui(f, &mut browser))?;
+
+        if event::poll(std::time::Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    handle_key_event(&mut browser, key.code).await;
+                }
+            }
+        }
+    }
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+
+    Ok(())
+}
+
 fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
     let image_count = browser.current_images.len();
     match &browser.view {
@@ -395,6 +469,27 @@ fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
 
             draw_detail_view(f, chunks[0], issue, browser.scroll_offset, image_count);
             draw_assignee_picker(f, chunks[1], issue, input, suggestions, *selected);
+        }
+        TuiView::ConfirmDispatch { issue } => {
+            let chunks = Layout::vertical([Constraint::Percentage(80), Constraint::Percentage(20)])
+                .split(f.area());
+
+            draw_detail_view(f, chunks[0], issue, browser.scroll_offset, image_count);
+            draw_confirmation(
+                f,
+                chunks[1],
+                &format!("Dispatch #{} to Claude Code? (y/n)", issue.number),
+            );
+        }
+        TuiView::AgentList { sessions, selected } => {
+            draw_agent_list(f, sessions, *selected);
+        }
+        TuiView::AgentLogs {
+            session_id,
+            content,
+            scroll,
+        } => {
+            draw_agent_logs(f, session_id, content, *scroll);
         }
     }
 }
@@ -641,11 +736,11 @@ fn draw_detail_view(
     let close_key = if issue.state == "Closed" { "X reopen" } else { "x close" };
     let title = if image_count > 0 {
         format!(
-            " #{} │ o open │ c comment │ a assign │ {} │ i/O image [{}/{}] │ ↑↓ scroll │ Esc ",
+            " #{} │ o open │ c comment │ a assign │ d dispatch │ {} │ i/O image [{}/{}] │ ↑↓ scroll │ Esc ",
             issue.number, close_key, 1, image_count
         )
     } else {
-        format!(" #{} │ o open │ c comment │ a assign │ {} │ ↑↓ scroll │ Esc ", issue.number, close_key)
+        format!(" #{} │ o open │ c comment │ a assign │ d dispatch │ {} │ ↑↓ scroll │ Esc ", issue.number, close_key)
     };
 
     let text = Text::from(lines);
@@ -932,6 +1027,103 @@ fn draw_assignee_picker(
     f.render_widget(list, chunks[2]);
 }
 
+fn draw_agent_list(f: &mut Frame, sessions: &[crate::agents::AgentSession], selected: usize) {
+    use crate::agents::AgentStatus;
+
+    let items: Vec<ListItem> = sessions
+        .iter()
+        .enumerate()
+        .map(|(i, session)| {
+            let status_icon = match &session.status {
+                AgentStatus::Running => "▶",
+                AgentStatus::Completed { .. } => "✓",
+                AgentStatus::Failed { .. } => "✗",
+            };
+
+            let status_color = match &session.status {
+                AgentStatus::Running => Color::Yellow,
+                AgentStatus::Completed { .. } => Color::Green,
+                AgentStatus::Failed { .. } => Color::Red,
+            };
+
+            let pr_badge = if session.pr_url.is_some() {
+                " [PR]"
+            } else {
+                ""
+            };
+
+            let line = Line::from(vec![
+                Span::styled(
+                    format!(" {} ", status_icon),
+                    Style::default().fg(status_color),
+                ),
+                Span::styled(
+                    format!("#{:<5}", session.issue_number),
+                    Style::default().fg(Color::Cyan),
+                ),
+                Span::raw(&session.issue_title),
+                Span::styled(
+                    format!(
+                        "  +{} -{} {} files  {}{}",
+                        session.stats.lines_added,
+                        session.stats.lines_deleted,
+                        session.stats.files_changed,
+                        session.duration_str(),
+                        pr_badge
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+
+            let style = if i == selected {
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            ListItem::new(line).style(style)
+        })
+        .collect();
+
+    let title = format!(
+        " Agents ({}) │ Enter logs │ p PR │ o open │ k kill │ q back ",
+        sessions.len()
+    );
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+
+    f.render_widget(list, f.area());
+}
+
+fn draw_agent_logs(f: &mut Frame, session_id: &str, content: &str, scroll: u16) {
+    let lines: Vec<Line> = content
+        .lines()
+        .map(|line| Line::from(line.to_string()))
+        .collect();
+
+    let title = format!(" Agent {} │ ↑↓ scroll │ q back ", &session_id[..8]);
+
+    let text = Text::from(lines);
+    let paragraph = Paragraph::new(text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(Style::default().fg(Color::Yellow)),
+        )
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
+
+    f.render_widget(paragraph, f.area());
+}
+
 fn format_date(date_str: &str) -> String {
     // Simple date formatting: take first 10 chars if available
     if date_str.len() >= 10 {
@@ -973,6 +1165,15 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                 // Clear search filter
                 browser.clear_search();
                 browser.status_message = Some("Filter cleared".to_string());
+            }
+            KeyCode::Char('A') => {
+                // Open agent list
+                let manager = crate::agents::SessionManager::load();
+                let sessions_list: Vec<_> = manager.list().to_vec();
+                browser.view = TuiView::AgentList {
+                    sessions: sessions_list,
+                    selected: 0,
+                };
             }
             _ => {}
         },
@@ -1082,6 +1283,11 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                     suggestions,
                     selected: 0,
                 };
+            }
+            KeyCode::Char('d') => {
+                // Dispatch to Claude Code
+                let issue_clone = issue.clone();
+                browser.view = TuiView::ConfirmDispatch { issue: issue_clone };
             }
             _ => {}
         },
@@ -1333,6 +1539,145 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                 _ => {}
             }
         }
+        TuiView::ConfirmDispatch { issue } => match key {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let number = issue.number;
+
+                // Check if we have local_path configured
+                if let (Some(project), Some(local_path)) =
+                    (&browser.project_name, &browser.local_path)
+                {
+                    match crate::agents::dispatch_to_claude(issue, local_path, project).await {
+                        Ok(session) => {
+                            browser.status_message = Some(format!(
+                                "Dispatched #{} to Claude Code (session {})",
+                                number,
+                                &session.id[..8]
+                            ));
+                        }
+                        Err(e) => {
+                            browser.status_message = Some(format!("Failed to dispatch: {}", e));
+                        }
+                    }
+                } else {
+                    browser.status_message = Some(
+                        "No local_path configured for this project. Add it to assistant.json"
+                            .to_string(),
+                    );
+                }
+
+                // Return to detail view
+                if let Ok(detail) = browser.github.get_issue(number).await {
+                    browser.view = TuiView::Detail(detail);
+                } else {
+                    browser.view = TuiView::List;
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                let number = issue.number;
+                if let Ok(detail) = browser.github.get_issue(number).await {
+                    browser.view = TuiView::Detail(detail);
+                } else {
+                    browser.view = TuiView::List;
+                }
+            }
+            _ => {}
+        },
+        TuiView::AgentList { sessions, selected } => match key {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                browser.view = TuiView::List;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if *selected > 0 {
+                    *selected -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if *selected < sessions.len().saturating_sub(1) {
+                    *selected += 1;
+                }
+            }
+            KeyCode::Enter => {
+                // View logs for selected session
+                if let Some(session) = sessions.get(*selected) {
+                    let content = std::fs::read_to_string(&session.log_file).unwrap_or_default();
+                    browser.view = TuiView::AgentLogs {
+                        session_id: session.id.clone(),
+                        content,
+                        scroll: 0,
+                    };
+                }
+            }
+            KeyCode::Char('K') => {
+                // Kill selected session
+                if let Some(session) = sessions.get(*selected) {
+                    if session.is_running() {
+                        let _ = crate::agents::kill_agent(&session.id);
+                        browser.status_message = Some(format!("Killed agent {}", &session.id[..8]));
+                        // Refresh sessions
+                        let manager = crate::agents::SessionManager::load();
+                        let sessions_list: Vec<_> = manager.list().to_vec();
+                        browser.view = TuiView::AgentList {
+                            sessions: sessions_list,
+                            selected: 0,
+                        };
+                    }
+                }
+            }
+            KeyCode::Char('p') => {
+                // Create PR from selected session
+                if let Some(session) = sessions.get(*selected) {
+                    if !session.is_running() && session.pr_url.is_none() {
+                        match crate::agents::create_pr(session) {
+                            Ok(url) => {
+                                browser.status_message = Some(format!("PR created: {}", url));
+                            }
+                            Err(e) => {
+                                browser.status_message = Some(format!("Failed to create PR: {}", e));
+                            }
+                        }
+                        // Refresh sessions
+                        let manager = crate::agents::SessionManager::load();
+                        let sessions_list: Vec<_> = manager.list().to_vec();
+                        browser.view = TuiView::AgentList {
+                            sessions: sessions_list,
+                            selected: *selected,
+                        };
+                    }
+                }
+            }
+            KeyCode::Char('o') => {
+                // Open worktree in finder/explorer
+                if let Some(session) = sessions.get(*selected) {
+                    let _ = open::that(&session.worktree_path);
+                }
+            }
+            _ => {}
+        },
+        TuiView::AgentLogs { scroll, .. } => match key {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                // Go back to agent list
+                let manager = crate::agents::SessionManager::load();
+                let sessions_list: Vec<_> = manager.list().to_vec();
+                browser.view = TuiView::AgentList {
+                    sessions: sessions_list,
+                    selected: 0,
+                };
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                *scroll = scroll.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                *scroll += 1;
+            }
+            KeyCode::PageUp => {
+                *scroll = scroll.saturating_sub(20);
+            }
+            KeyCode::PageDown => {
+                *scroll += 20;
+            }
+            _ => {}
+        },
     }
 }
 

@@ -24,6 +24,8 @@ regex = "1"
 image = "0.25"
 ratatui-image = { version = "10.0.2", default-features = false, features = ["crossterm", "image-defaults"] }
 fuzzy-matcher = "0.3.7"
+uuid = { version = "1.19.0", features = ["v4"] }
+chrono = { version = "0.4.42", features = ["serde"] }
 
 [dev-dependencies]
 wiremock = "0.6"

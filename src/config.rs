@@ -10,6 +10,9 @@ pub struct ProjectConfig {
     pub labels: Vec<String>,
     #[serde(default)]
     pub list_commands: HashMap<String, Vec<String>>,
+    /// Local path to the repository for Claude Code integration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_path: Option<PathBuf>,
 }
 
 impl ProjectConfig {
