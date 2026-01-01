@@ -439,8 +439,20 @@ fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
                 }
     }
 
+    // Clone status message to avoid borrow conflicts
+    let status_msg = browser.status_message.clone();
+
     match &browser.view {
-        TuiView::List => draw_list_view(f, browser),
+        TuiView::List => {
+            if let Some(ref msg) = status_msg {
+                let chunks = Layout::vertical([Constraint::Min(3), Constraint::Length(3)])
+                    .split(f.area());
+                draw_list_view_in_area(f, browser, chunks[0]);
+                draw_status_bar(f, chunks[1], msg);
+            } else {
+                draw_list_view(f, browser);
+            }
+        }
         TuiView::Search { input } => {
             // Split screen: list on top (90%), search input at bottom (10%)
             let chunks = Layout::vertical([Constraint::Min(3), Constraint::Length(3)])
@@ -451,7 +463,15 @@ fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
             draw_search_input(f, chunks[1], &input_clone);
         }
         TuiView::Detail(issue) => {
-            draw_detail_view(f, f.area(), issue, browser.scroll_offset, image_count);
+            if let Some(ref msg) = status_msg {
+                // Show status message at the bottom
+                let chunks = Layout::vertical([Constraint::Min(3), Constraint::Length(3)])
+                    .split(f.area());
+                draw_detail_view(f, chunks[0], issue, browser.scroll_offset, image_count);
+                draw_status_bar(f, chunks[1], msg);
+            } else {
+                draw_detail_view(f, f.area(), issue, browser.scroll_offset, image_count);
+            }
         }
         TuiView::AddComment { issue, input } => {
             // Split screen: issue on top (75%), comment input at bottom (25%)
@@ -991,6 +1011,25 @@ fn draw_confirmation(f: &mut Frame, area: Rect, message: &str) {
     f.render_widget(paragraph, area);
 }
 
+fn draw_status_bar(f: &mut Frame, area: Rect, message: &str) {
+    let color = if message.contains("Failed") || message.contains("No ") || message.contains("error") {
+        Color::Red
+    } else {
+        Color::Green
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(color));
+
+    let paragraph = Paragraph::new(message)
+        .block(block)
+        .style(Style::default().fg(color))
+        .alignment(ratatui::layout::Alignment::Center);
+
+    f.render_widget(paragraph, area);
+}
+
 fn draw_assignee_picker(
     f: &mut Frame,
     area: Rect,
@@ -1206,6 +1245,9 @@ fn format_date(date_str: &str) -> String {
 }
 
 async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
+    // Clear status message on any keypress
+    browser.status_message = None;
+
     match &mut browser.view {
         TuiView::List => match key {
             KeyCode::Esc | KeyCode::Char('q') => browser.should_quit = true,
