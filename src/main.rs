@@ -530,6 +530,8 @@ async fn handle_list_with_options(args: &str, state: &AppState) {
                     options.labels.clone(),
                     options.state.clone(),
                     has_next_page,
+                    state.current_project_name.clone(),
+                    project.local_path.clone(),
                 ).await
             {
                 print_colored_message(&format!("TUI error: {}\n", e), Color::Red);
@@ -592,7 +594,18 @@ async fn handle_list_command(labels: Vec<String>, state: &AppState) {
                 .unwrap_or(false);
 
             if let Err(e) =
-                tui::run_issue_browser(issues, github, github_token, auto_format, &llm::default_endpoint()).await
+                tui::run_issue_browser_with_pagination(
+                    issues,
+                    github,
+                    github_token,
+                    auto_format,
+                    &llm::default_endpoint(),
+                    labels.clone(),
+                    IssueState::Open,
+                    false,
+                    state.current_project_name.clone(),
+                    project.local_path.clone(),
+                ).await
             {
                 print_colored_message(&format!("TUI error: {}\n", e), Color::Red);
             }

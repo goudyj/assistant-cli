@@ -324,6 +324,8 @@ pub async fn run_issue_browser(
         Vec::new(),
         crate::list::IssueState::Open,
         false,
+        None,
+        None,
     )
     .await
 }
@@ -339,6 +341,8 @@ pub async fn run_issue_browser_with_pagination(
     labels: Vec<String>,
     state_filter: crate::list::IssueState,
     has_next_page: bool,
+    project_name: Option<String>,
+    local_path: Option<std::path::PathBuf>,
 ) -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -357,6 +361,11 @@ pub async fn run_issue_browser_with_pagination(
         state_filter,
         has_next_page,
     );
+
+    // Set project info for Claude Code dispatch
+    if let (Some(name), Some(path)) = (project_name, local_path) {
+        browser.set_project_info(name, path);
+    }
 
     while !browser.should_quit {
         terminal.draw(|f| draw_ui(f, &mut browser))?;

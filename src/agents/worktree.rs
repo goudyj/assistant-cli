@@ -45,6 +45,43 @@ pub fn create_worktree(
     project: &str,
     issue_number: u64,
 ) -> Result<(PathBuf, String), WorktreeError> {
+    // Verify local_path exists
+    if !local_path.exists() {
+        return Err(WorktreeError::GitError(format!(
+            "Path does not exist: {}",
+            local_path.display()
+        )));
+    }
+
+    // Verify it's a git repository
+    let is_git_repo = Command::new("git")
+        .current_dir(local_path)
+        .args(["rev-parse", "--git-dir"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !is_git_repo {
+        return Err(WorktreeError::GitError(format!(
+            "Not a git repository: {}. Run 'git init' or clone a repo.",
+            local_path.display()
+        )));
+    }
+
+    // Verify there's at least one commit
+    let has_commits = Command::new("git")
+        .current_dir(local_path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !has_commits {
+        return Err(WorktreeError::GitError(
+            "Repository has no commits. Create at least one commit first.".to_string(),
+        ));
+    }
+
     let branch_name = format!("issue-{}", issue_number);
     let worktree_name = format!("{}-{}", project, issue_number);
     let worktree_path = worktrees_dir().join(&worktree_name);
