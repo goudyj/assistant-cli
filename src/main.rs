@@ -136,8 +136,8 @@ async fn main() {
                 );
             }
 
-            if let Some(ref last_project) = cfg.last_project {
-                if let Some(project) = cfg.get_project(last_project) {
+            if let Some(ref last_project) = cfg.last_project
+                && let Some(project) = cfg.get_project(last_project) {
                     print_colored_message(
                         &format!("Restored project: {}/{}\n", project.owner, project.repo),
                         Color::Green,
@@ -145,7 +145,6 @@ async fn main() {
                     state.current_project = Some(project.clone());
                     state.current_project_name = Some(last_project.clone());
                 }
-            }
 
             state.config = Some(cfg);
         }
@@ -243,12 +242,11 @@ async fn main() {
                 _ => {
                     // Check if it's a dynamic list command
                     let cmd_name = command.trim_start_matches('/');
-                    if let Some(ref project) = state.current_project {
-                        if let Some(labels) = project.get_list_command_labels(cmd_name) {
+                    if let Some(ref project) = state.current_project
+                        && let Some(labels) = project.get_list_command_labels(cmd_name) {
                             handle_list_command(labels.clone(), &state).await;
                             continue;
                         }
-                    }
                     print_colored_message("Unknown command. Type /help.\n", Color::DarkMagenta);
                 }
             }

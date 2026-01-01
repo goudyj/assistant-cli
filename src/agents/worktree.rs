@@ -157,14 +157,13 @@ pub fn remove_worktree(
     }
 
     // Remove the branch if requested
-    if let Some(branch) = branch_name {
-        if !branch.is_empty() && branch != "master" && branch != "main" {
+    if let Some(branch) = branch_name
+        && !branch.is_empty() && branch != "master" && branch != "main" {
             let _ = Command::new("git")
                 .current_dir(local_path)
                 .args(["branch", "-D", &branch])
                 .output();
         }
-    }
 
     Ok(())
 }
@@ -180,8 +179,8 @@ pub fn get_diff_stats(worktree_path: &Path) -> (usize, usize, usize) {
         .output()
         .ok();
 
-    if let Some(output) = output {
-        if output.status.success() {
+    if let Some(output) = output
+        && output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let mut lines_added = 0;
             let mut lines_deleted = 0;
@@ -203,7 +202,6 @@ pub fn get_diff_stats(worktree_path: &Path) -> (usize, usize, usize) {
 
             return (lines_added, lines_deleted, files_changed);
         }
-    }
 
     // Fallback: try diff from initial state
     let output = Command::new("git")
@@ -212,8 +210,8 @@ pub fn get_diff_stats(worktree_path: &Path) -> (usize, usize, usize) {
         .output()
         .ok();
 
-    if let Some(output) = output {
-        if output.status.success() {
+    if let Some(output) = output
+        && output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let mut lines_added = 0;
             let mut lines_deleted = 0;
@@ -234,7 +232,6 @@ pub fn get_diff_stats(worktree_path: &Path) -> (usize, usize, usize) {
 
             return (lines_added, lines_deleted, files_changed);
         }
-    }
 
     (0, 0, 0)
 }

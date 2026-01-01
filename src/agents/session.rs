@@ -59,6 +59,7 @@ pub struct AgentSession {
 
 impl AgentSession {
     /// Create a new agent session
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: String,
         issue_number: u64,
@@ -302,5 +303,157 @@ mod tests {
 
         // Just check it doesn't panic
         let _dur = session.duration_str();
+    }
+
+    #[test]
+    fn session_serialization() {
+        let session = AgentSession::new(
+            "test-id".to_string(),
+            123,
+            "Test issue".to_string(),
+            "test-project".to_string(),
+            1234,
+            PathBuf::from("/tmp/test.log"),
+            PathBuf::from("/tmp/worktree"),
+            "issue-123".to_string(),
+        );
+
+        // Test JSON round-trip
+        let json = serde_json::to_string(&session).unwrap();
+        let deserialized: AgentSession = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.id, "test-id");
+        assert_eq!(deserialized.issue_number, 123);
+        assert_eq!(deserialized.issue_title, "Test issue");
+        assert_eq!(deserialized.project, "test-project");
+        assert!(deserialized.is_running());
+    }
+
+    #[test]
+    fn session_manager_running_filter() {
+        let mut manager = SessionManager { sessions: Vec::new() };
+
+        let running = AgentSession::new(
+            "running".to_string(),
+            1,
+            "Running".to_string(),
+            "project".to_string(),
+            100,
+            PathBuf::from("/tmp/1.log"),
+            PathBuf::from("/tmp/1"),
+            "issue-1".to_string(),
+        );
+
+        let mut completed = AgentSession::new(
+            "completed".to_string(),
+            2,
+            "Completed".to_string(),
+            "project".to_string(),
+            200,
+            PathBuf::from("/tmp/2.log"),
+            PathBuf::from("/tmp/2"),
+            "issue-2".to_string(),
+        );
+        completed.status = AgentStatus::Completed { exit_code: 0 };
+
+        manager.add(running);
+        manager.add(completed);
+
+        let running_sessions = manager.running();
+        assert_eq!(running_sessions.len(), 1);
+        assert_eq!(running_sessions[0].id, "running");
+    }
+
+    #[test]
+    fn session_manager_update_stats() {
+        let mut manager = SessionManager { sessions: Vec::new() };
+
+        let session = AgentSession::new(
+            "test-id".to_string(),
+            123,
+            "Test issue".to_string(),
+            "test-project".to_string(),
+            1234,
+            PathBuf::from("/tmp/test.log"),
+            PathBuf::from("/tmp/worktree"),
+            "issue-123".to_string(),
+        );
+
+        manager.add(session);
+
+        let new_stats = AgentStats {
+            lines_output: 100,
+            lines_added: 50,
+            lines_deleted: 20,
+            files_changed: 5,
+        };
+
+        assert!(manager.update_stats("test-id", new_stats));
+        let updated = manager.get("test-id").unwrap();
+        assert_eq!(updated.stats.lines_output, 100);
+        assert_eq!(updated.stats.lines_added, 50);
+        assert_eq!(updated.stats.files_changed, 5);
+    }
+
+    #[test]
+    fn session_manager_remove() {
+        let mut manager = SessionManager { sessions: Vec::new() };
+
+        let session = AgentSession::new(
+            "test-id".to_string(),
+            123,
+            "Test issue".to_string(),
+            "test-project".to_string(),
+            1234,
+            PathBuf::from("/tmp/test.log"),
+            PathBuf::from("/tmp/worktree"),
+            "issue-123".to_string(),
+        );
+
+        manager.add(session);
+        assert!(manager.get("test-id").is_some());
+
+        let removed = manager.remove("test-id");
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().id, "test-id");
+        assert!(manager.get("test-id").is_none());
+    }
+
+    #[test]
+    fn cleanup_old_sessions() {
+        let mut manager = SessionManager { sessions: Vec::new() };
+
+        // Create a running session (should not be removed)
+        let running = AgentSession::new(
+            "running".to_string(),
+            1,
+            "Running".to_string(),
+            "project".to_string(),
+            100,
+            PathBuf::from("/tmp/1.log"),
+            PathBuf::from("/tmp/1"),
+            "issue-1".to_string(),
+        );
+
+        // Create a recent completed session (should not be removed)
+        let mut recent = AgentSession::new(
+            "recent".to_string(),
+            2,
+            "Recent".to_string(),
+            "project".to_string(),
+            200,
+            PathBuf::from("/tmp/2.log"),
+            PathBuf::from("/tmp/2"),
+            "issue-2".to_string(),
+        );
+        recent.status = AgentStatus::Completed { exit_code: 0 };
+
+        manager.add(running);
+        manager.add(recent);
+
+        // Cleanup sessions older than 7 days (none should be removed)
+        manager.cleanup_old_sessions(7);
+
+        assert_eq!(manager.list().len(), 2);
     }
 }

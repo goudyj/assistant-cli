@@ -194,8 +194,8 @@ fn count_log_lines(log_file: &Path) -> usize {
 pub fn kill_agent(session_id: &str) -> Result<(), AgentError> {
     let manager = SessionManager::load();
 
-    if let Some(session) = manager.get(session_id) {
-        if session.is_running() {
+    if let Some(session) = manager.get(session_id)
+        && session.is_running() {
             // Try to kill the process
             #[cfg(unix)]
             {
@@ -222,7 +222,6 @@ pub fn kill_agent(session_id: &str) -> Result<(), AgentError> {
             );
             manager.save()?;
         }
-    }
 
     Ok(())
 }
@@ -301,5 +300,25 @@ mod tests {
     fn count_log_lines_nonexistent() {
         let count = count_log_lines(Path::new("/nonexistent/file.log"));
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn build_prompt_with_special_characters() {
+        let issue = IssueDetail {
+            number: 789,
+            title: "Fix \"quotes\" and `backticks`".to_string(),
+            body: Some("Description with\nnewlines\nand special chars: <>&".to_string()),
+            html_url: "https://github.com/test/test/issues/789".to_string(),
+            labels: vec![],
+            state: "Open".to_string(),
+            assignees: vec![],
+            comments: vec![],
+        };
+
+        let prompt = build_prompt(&issue);
+        assert!(prompt.contains("Fix GitHub issue #789"));
+        assert!(prompt.contains("\"quotes\""));
+        assert!(prompt.contains("`backticks`"));
+        assert!(prompt.contains("<>&"));
     }
 }

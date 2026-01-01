@@ -44,6 +44,11 @@ pub enum TuiView {
         content: String,
         scroll: u16,
     },
+    AgentDiff {
+        session_id: String,
+        content: String,
+        scroll: u16,
+    },
 }
 
 /// Main TUI state
@@ -73,6 +78,8 @@ pub struct IssueBrowser {
     // Project info for Claude Code dispatch
     pub project_name: Option<String>,
     pub local_path: Option<std::path::PathBuf>,
+    // Multi-select for batch dispatch
+    pub selected_issues: std::collections::HashSet<u64>,
 }
 
 impl IssueBrowser {
@@ -95,6 +102,7 @@ impl IssueBrowser {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn with_pagination(
         issues: Vec<IssueSummary>,
         github: GitHubConfig,
@@ -132,6 +140,7 @@ impl IssueBrowser {
             available_assignees: Vec::new(),
             project_name: None,
             local_path: None,
+            selected_issues: std::collections::HashSet::new(),
         }
     }
 
@@ -320,6 +329,7 @@ pub async fn run_issue_browser(
 }
 
 /// Run the TUI application with pagination support
+#[allow(clippy::too_many_arguments)]
 pub async fn run_issue_browser_with_pagination(
     issues: Vec<IssueSummary>,
     github: GitHubConfig,
@@ -351,13 +361,11 @@ pub async fn run_issue_browser_with_pagination(
     while !browser.should_quit {
         terminal.draw(|f| draw_ui(f, &mut browser))?;
 
-        if event::poll(std::time::Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
+        if event::poll(std::time::Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+                && key.kind == KeyEventKind::Press {
                     handle_key_event(&mut browser, key.code).await;
                 }
-            }
-        }
     }
 
     disable_raw_mode()?;
@@ -404,13 +412,11 @@ pub async fn run_agent_browser(
     while !browser.should_quit {
         terminal.draw(|f| draw_ui(f, &mut browser))?;
 
-        if event::poll(std::time::Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
+        if event::poll(std::time::Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+                && key.kind == KeyEventKind::Press {
                     handle_key_event(&mut browser, key.code).await;
                 }
-            }
-        }
     }
 
     disable_raw_mode()?;
@@ -422,6 +428,17 @@ pub async fn run_agent_browser(
 
 fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
     let image_count = browser.current_images.len();
+
+    // Auto-refresh log content if viewing running agent logs
+    if let TuiView::AgentLogs { session_id, content, .. } = &mut browser.view {
+        let manager = crate::agents::SessionManager::load();
+        if let Some(session) = manager.get(session_id)
+            && session.is_running()
+                && let Ok(new_content) = std::fs::read_to_string(&session.log_file) {
+                    *content = new_content;
+                }
+    }
+
     match &browser.view {
         TuiView::List => draw_list_view(f, browser),
         TuiView::Search { input } => {
@@ -491,6 +508,13 @@ fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
         } => {
             draw_agent_logs(f, session_id, content, *scroll);
         }
+        TuiView::AgentDiff {
+            session_id,
+            content,
+            scroll,
+        } => {
+            draw_agent_diff(f, session_id, content, *scroll);
+        }
     }
 }
 
@@ -499,6 +523,9 @@ fn draw_list_view(f: &mut Frame, browser: &mut IssueBrowser) {
         .issues
         .iter()
         .map(|issue| {
+            let is_selected = browser.selected_issues.contains(&issue.number);
+            let select_marker = if is_selected { "[x] " } else { "[ ] " };
+
             let labels_str = if issue.labels.is_empty() {
                 String::new()
             } else {
@@ -513,6 +540,10 @@ fn draw_list_view(f: &mut Frame, browser: &mut IssueBrowser) {
             let line = if is_closed {
                 // Closed issues are shown in gray with strikethrough effect
                 Line::from(vec![
+                    Span::styled(
+                        select_marker,
+                        if is_selected { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) },
+                    ),
                     Span::styled(
                         format!("#{:<5}", issue.number),
                         Style::default().fg(Color::DarkGray),
@@ -530,6 +561,10 @@ fn draw_list_view(f: &mut Frame, browser: &mut IssueBrowser) {
                 ])
             } else {
                 Line::from(vec![
+                    Span::styled(
+                        select_marker,
+                        if is_selected { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) },
+                    ),
                     Span::styled(
                         format!("#{:<5}", issue.number),
                         Style::default().fg(Color::Cyan),
@@ -562,7 +597,11 @@ fn draw_list_view(f: &mut Frame, browser: &mut IssueBrowser) {
             parts.push("[Loading...]".to_string());
         }
 
-        format!(" {} │ / search │ c clear │ ↑↓ navigate │ Enter view │ Esc quit ", parts.join(" "))
+        if !browser.selected_issues.is_empty() {
+            parts.push(format!("[{} selected]", browser.selected_issues.len()));
+        }
+
+        format!(" {} │ Space select │ d dispatch │ / search │ c clear │ q quit ", parts.join(" "))
     };
 
     let list = List::new(items)
@@ -794,26 +833,26 @@ fn render_markdown_line(line: &str) -> Line<'static> {
     let trimmed = line.trim();
 
     // Headers - differentiated by style
-    if trimmed.starts_with("### ") {
+    if let Some(h3_content) = trimmed.strip_prefix("### ") {
         // H3: smaller, gray-cyan
         return Line::styled(
-            format!("   {}", &trimmed[4..]),
+            format!("   {}", h3_content),
             Style::default().fg(Color::DarkGray),
         );
     }
-    if trimmed.starts_with("## ") {
+    if let Some(h2_content) = trimmed.strip_prefix("## ") {
         // H2: cyan bold
         return Line::styled(
-            format!("▸ {}", &trimmed[3..]),
+            format!("▸ {}", h2_content),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         );
     }
-    if trimmed.starts_with("# ") {
+    if let Some(h1_content) = trimmed.strip_prefix("# ") {
         // H1: uppercase, bright cyan, with underline effect
         return Line::styled(
-            format!("═ {} ═", trimmed[2..].to_uppercase()),
+            format!("═ {} ═", h1_content.to_uppercase()),
             Style::default()
                 .fg(Color::LightCyan)
                 .add_modifier(Modifier::BOLD),
@@ -844,8 +883,7 @@ fn render_markdown_line(line: &str) -> Line<'static> {
             .next()
             .map(|c| c.is_ascii_digit())
             .unwrap_or(false)
-    {
-        if let Some(dot_pos) = trimmed.find(". ") {
+        && let Some(dot_pos) = trimmed.find(". ") {
             let num = &trimmed[..dot_pos];
             let content = &trimmed[dot_pos + 2..];
             return Line::from(vec![
@@ -853,7 +891,6 @@ fn render_markdown_line(line: &str) -> Line<'static> {
                 Span::raw(render_inline_markdown(content)),
             ]);
         }
-    }
 
     // [Image: ...] markers
     if trimmed.starts_with("[Image:") {
@@ -1088,7 +1125,7 @@ fn draw_agent_list(f: &mut Frame, sessions: &[crate::agents::AgentSession], sele
         .collect();
 
     let title = format!(
-        " Agents ({}) │ Enter logs │ p PR │ o open │ k kill │ q back ",
+        " Agents ({}) │ Enter logs │ D diff │ p PR │ o open │ C clean │ K kill │ q back ",
         sessions.len()
     );
 
@@ -1124,6 +1161,41 @@ fn draw_agent_logs(f: &mut Frame, session_id: &str, content: &str, scroll: u16) 
     f.render_widget(paragraph, f.area());
 }
 
+fn draw_agent_diff(f: &mut Frame, session_id: &str, content: &str, scroll: u16) {
+    // Color diff lines: green for additions, red for deletions
+    let lines: Vec<Line> = content
+        .lines()
+        .map(|line| {
+            let style = if line.starts_with('+') && !line.starts_with("+++") {
+                Style::default().fg(Color::Green)
+            } else if line.starts_with('-') && !line.starts_with("---") {
+                Style::default().fg(Color::Red)
+            } else if line.starts_with("@@") {
+                Style::default().fg(Color::Cyan)
+            } else if line.starts_with("diff ") || line.starts_with("index ") {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            };
+            Line::from(Span::styled(line.to_string(), style))
+        })
+        .collect();
+
+    let title = format!(" Agent {} Diff │ ↑↓ scroll │ q back ", &session_id[..8]);
+
+    let text = Text::from(lines);
+    let paragraph = Paragraph::new(text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(Style::default().fg(Color::Green)),
+        )
+        .scroll((scroll, 0));
+
+    f.render_widget(paragraph, f.area());
+}
+
 fn format_date(date_str: &str) -> String {
     // Simple date formatting: take first 10 chars if available
     if date_str.len() >= 10 {
@@ -1140,11 +1212,10 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
             KeyCode::Down | KeyCode::Char('j') => {
                 browser.next();
                 // Check if we need to load more issues
-                if let Some(selected) = browser.list_state.selected() {
-                    if browser.has_next_page && selected >= browser.issues.len().saturating_sub(5) {
+                if let Some(selected) = browser.list_state.selected()
+                    && browser.has_next_page && selected >= browser.issues.len().saturating_sub(5) {
                         browser.load_next_page().await;
                     }
-                }
             }
             KeyCode::Up | KeyCode::Char('k') => browser.previous(),
             KeyCode::Enter => {
@@ -1175,6 +1246,39 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                     selected: 0,
                 };
             }
+            KeyCode::Char(' ') => {
+                // Toggle selection of current issue
+                if let Some(issue) = browser.selected_issue() {
+                    let number = issue.number;
+                    if browser.selected_issues.contains(&number) {
+                        browser.selected_issues.remove(&number);
+                    } else {
+                        browser.selected_issues.insert(number);
+                    }
+                }
+            }
+            KeyCode::Char('d') => {
+                // Dispatch selected issues to Claude Code
+                if browser.selected_issues.is_empty() {
+                    browser.status_message = Some("No issues selected. Press Space to select.".to_string());
+                } else if browser.local_path.is_none() {
+                    browser.status_message = Some("No local_path configured for this project.".to_string());
+                } else {
+                    let count = browser.selected_issues.len();
+                    let project_name = browser.project_name.clone().unwrap_or_default();
+                    let local_path = browser.local_path.clone().unwrap();
+
+                    // Dispatch each selected issue
+                    for issue_number in browser.selected_issues.iter() {
+                        if let Ok(detail) = browser.github.get_issue(*issue_number).await {
+                            let _ = crate::agents::dispatch_to_claude(&detail, &local_path, &project_name).await;
+                        }
+                    }
+
+                    browser.status_message = Some(format!("Dispatched {} issues to Claude Code.", count));
+                    browser.selected_issues.clear();
+                }
+            }
             _ => {}
         },
         TuiView::Search { input } => {
@@ -1196,12 +1300,11 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                 _ => {}
             }
             // Apply filter after processing key (unless we're leaving search mode)
-            if matches!(browser.view, TuiView::Search { .. }) {
-                if let TuiView::Search { input } = &browser.view {
+            if matches!(browser.view, TuiView::Search { .. })
+                && let TuiView::Search { input } = &browser.view {
                     let query = input.clone();
                     browser.apply_search_filter(&query);
                 }
-            }
         }
         TuiView::Detail(issue) => match key {
             KeyCode::Esc | KeyCode::Char('q') => {
@@ -1610,8 +1713,8 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
             }
             KeyCode::Char('K') => {
                 // Kill selected session
-                if let Some(session) = sessions.get(*selected) {
-                    if session.is_running() {
+                if let Some(session) = sessions.get(*selected)
+                    && session.is_running() {
                         let _ = crate::agents::kill_agent(&session.id);
                         browser.status_message = Some(format!("Killed agent {}", &session.id[..8]));
                         // Refresh sessions
@@ -1622,12 +1725,11 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                             selected: 0,
                         };
                     }
-                }
             }
             KeyCode::Char('p') => {
                 // Create PR from selected session
-                if let Some(session) = sessions.get(*selected) {
-                    if !session.is_running() && session.pr_url.is_none() {
+                if let Some(session) = sessions.get(*selected)
+                    && !session.is_running() && session.pr_url.is_none() {
                         match crate::agents::create_pr(session) {
                             Ok(url) => {
                                 browser.status_message = Some(format!("PR created: {}", url));
@@ -1644,7 +1746,6 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                             selected: *selected,
                         };
                     }
-                }
             }
             KeyCode::Char('o') => {
                 // Open worktree in finder/explorer
@@ -1652,9 +1753,90 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                     let _ = open::that(&session.worktree_path);
                 }
             }
+            KeyCode::Char('D') => {
+                // View diff for selected session
+                if let Some(session) = sessions.get(*selected) {
+                    let output = std::process::Command::new("git")
+                        .current_dir(&session.worktree_path)
+                        .args(["diff", "HEAD"])
+                        .output();
+
+                    let content = match output {
+                        Ok(out) if out.status.success() => {
+                            String::from_utf8_lossy(&out.stdout).to_string()
+                        }
+                        _ => "No changes or failed to get diff".to_string(),
+                    };
+
+                    browser.view = TuiView::AgentDiff {
+                        session_id: session.id.clone(),
+                        content,
+                        scroll: 0,
+                    };
+                }
+            }
+            KeyCode::Char('C') => {
+                // Cleanup worktree for selected session
+                if let Some(session) = sessions.get(*selected)
+                    && !session.is_running() {
+                        // Get the main repo path by going up from worktree
+                        if let Some(parent) = session.worktree_path.parent()
+                            && let Some(grandparent) = parent.parent() {
+                                // Remove worktree and branch
+                                let _ = crate::agents::remove_worktree(
+                                    grandparent,
+                                    &session.worktree_path,
+                                    true,
+                                );
+                                browser.status_message =
+                                    Some(format!("Cleaned up worktree for {}", &session.id[..8]));
+
+                                // Remove session from manager
+                                let mut manager = crate::agents::SessionManager::load();
+                                manager.remove(&session.id);
+                                let _ = manager.save();
+
+                                // Refresh sessions
+                                let sessions_list: Vec<_> = manager.list().to_vec();
+                                let new_selected = if *selected >= sessions_list.len() {
+                                    sessions_list.len().saturating_sub(1)
+                                } else {
+                                    *selected
+                                };
+                                browser.view = TuiView::AgentList {
+                                    sessions: sessions_list,
+                                    selected: new_selected,
+                                };
+                            }
+                    }
+            }
             _ => {}
         },
         TuiView::AgentLogs { scroll, .. } => match key {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                // Go back to agent list
+                let manager = crate::agents::SessionManager::load();
+                let sessions_list: Vec<_> = manager.list().to_vec();
+                browser.view = TuiView::AgentList {
+                    sessions: sessions_list,
+                    selected: 0,
+                };
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                *scroll = scroll.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                *scroll += 1;
+            }
+            KeyCode::PageUp => {
+                *scroll = scroll.saturating_sub(20);
+            }
+            KeyCode::PageDown => {
+                *scroll += 20;
+            }
+            _ => {}
+        },
+        TuiView::AgentDiff { scroll, .. } => match key {
             KeyCode::Esc | KeyCode::Char('q') => {
                 // Go back to agent list
                 let manager = crate::agents::SessionManager::load();
@@ -1735,11 +1917,10 @@ async fn display_image(
 
     // Add GitHub token for private repo images
     let mut request = client.get(url);
-    if url.contains("github.com") || url.contains("githubusercontent.com") {
-        if let Some(token) = github_token {
+    if (url.contains("github.com") || url.contains("githubusercontent.com"))
+        && let Some(token) = github_token {
             request = request.header("Authorization", format!("Bearer {}", token));
         }
-    }
 
     let response = request.send().await?;
 
@@ -1805,16 +1986,14 @@ fn show_image_view(
             f.render_stateful_widget(image_widget, chunks[1], image_state);
         })?;
 
-        if event::poll(std::time::Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
+        if event::poll(std::time::Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+                && key.kind == KeyEventKind::Press {
                     if key.code == KeyCode::Char('b') {
                         let _ = open::that(url);
                     }
                     break;
                 }
-            }
-        }
     }
 
     // Clear terminal before returning

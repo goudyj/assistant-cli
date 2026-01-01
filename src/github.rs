@@ -317,7 +317,7 @@ impl GitHubConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
@@ -702,5 +702,186 @@ mod tests {
             .await;
 
         assert!(result.is_ok());
+    }
+
+    fn mock_issues_list_response(issues: Vec<(u64, &str)>) -> Vec<serde_json::Value> {
+        issues
+            .into_iter()
+            .map(|(number, title)| {
+                serde_json::json!({
+                    "id": number,
+                    "node_id": format!("I_{}", number),
+                    "number": number,
+                    "title": title,
+                    "state": "open",
+                    "state_reason": null,
+                    "locked": false,
+                    "html_url": format!("https://github.com/owner/repo/issues/{}", number),
+                    "url": format!("https://api.github.com/repos/owner/repo/issues/{}", number),
+                    "repository_url": "https://api.github.com/repos/owner/repo",
+                    "labels_url": "https://api.github.com/repos/owner/repo/issues/{}/labels{/name}",
+                    "comments_url": "https://api.github.com/repos/owner/repo/issues/{}/comments",
+                    "events_url": "https://api.github.com/repos/owner/repo/issues/{}/events",
+                    "labels": [],
+                    "user": {
+                        "login": "test",
+                        "id": 1,
+                        "node_id": "U_test",
+                        "avatar_url": "https://avatars.githubusercontent.com/u/1",
+                        "gravatar_id": "",
+                        "url": "https://api.github.com/users/test",
+                        "html_url": "https://github.com/test",
+                        "followers_url": "https://api.github.com/users/test/followers",
+                        "following_url": "https://api.github.com/users/test/following{/other_user}",
+                        "gists_url": "https://api.github.com/users/test/gists{/gist_id}",
+                        "starred_url": "https://api.github.com/users/test/starred{/owner}{/repo}",
+                        "subscriptions_url": "https://api.github.com/users/test/subscriptions",
+                        "organizations_url": "https://api.github.com/users/test/orgs",
+                        "repos_url": "https://api.github.com/users/test/repos",
+                        "events_url": "https://api.github.com/users/test/events{/privacy}",
+                        "received_events_url": "https://api.github.com/users/test/received_events",
+                        "type": "User",
+                        "site_admin": false
+                    },
+                    "assignees": [],
+                    "milestone": null,
+                    "comments": 0,
+                    "created_at": "2024-01-01T00:00:00Z",
+                    "updated_at": "2024-01-01T00:00:00Z",
+                    "closed_at": null,
+                    "author_association": "OWNER",
+                    "body": "Test body"
+                })
+            })
+            .collect()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn list_issues_paginated_first_page() {
+        let server = MockServer::start().await;
+
+        let issues = mock_issues_list_response(vec![
+            (1, "First issue"),
+            (2, "Second issue"),
+        ]);
+
+        // Mock the first page with a Link header indicating next page
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo/issues"))
+            .and(query_param("page", "1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(&issues)
+                    .insert_header(
+                        "Link",
+                        "<https://api.github.com/repos/owner/repo/issues?page=2>; rel=\"next\", <https://api.github.com/repos/owner/repo/issues?page=3>; rel=\"last\"",
+                    ),
+            )
+            .mount(&server)
+            .await;
+
+        let client = Octocrab::builder()
+            .personal_token("token".to_string())
+            .base_uri(&server.uri())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let page = client
+            .issues("owner", "repo")
+            .list()
+            .per_page(2)
+            .page(1u32)
+            .send()
+            .await;
+
+        assert!(page.is_ok());
+        let page = page.unwrap();
+        assert_eq!(page.items.len(), 2);
+        assert!(page.next.is_some()); // has_next_page = true
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn list_issues_paginated_last_page() {
+        let server = MockServer::start().await;
+
+        let issues = mock_issues_list_response(vec![(3, "Third issue")]);
+
+        // Mock the last page without a Link header for next
+        Mock::given(method("GET"))
+            .and(path("/repos/owner/repo/issues"))
+            .and(query_param("page", "2"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(&issues)
+                    .insert_header(
+                        "Link",
+                        "<https://api.github.com/repos/owner/repo/issues?page=1>; rel=\"prev\", <https://api.github.com/repos/owner/repo/issues?page=1>; rel=\"first\"",
+                    ),
+            )
+            .mount(&server)
+            .await;
+
+        let client = Octocrab::builder()
+            .personal_token("token".to_string())
+            .base_uri(&server.uri())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let page = client
+            .issues("owner", "repo")
+            .list()
+            .per_page(2)
+            .page(2u32)
+            .send()
+            .await;
+
+        assert!(page.is_ok());
+        let page = page.unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert!(page.next.is_none()); // has_next_page = false
+    }
+
+    #[test]
+    fn issue_summary_no_duplicates() {
+        // Test that issues can be deduplicated by number
+        let issues = vec![
+            IssueSummary {
+                number: 1,
+                title: "First".to_string(),
+                html_url: "https://github.com/test/test/issues/1".to_string(),
+                labels: vec![],
+                state: "Open".to_string(),
+                assignees: vec![],
+            },
+            IssueSummary {
+                number: 2,
+                title: "Second".to_string(),
+                html_url: "https://github.com/test/test/issues/2".to_string(),
+                labels: vec![],
+                state: "Open".to_string(),
+                assignees: vec![],
+            },
+            IssueSummary {
+                number: 1, // Duplicate
+                title: "First (duplicate)".to_string(),
+                html_url: "https://github.com/test/test/issues/1".to_string(),
+                labels: vec![],
+                state: "Open".to_string(),
+                assignees: vec![],
+            },
+        ];
+
+        // Deduplicate by number (keep first occurrence)
+        let mut seen = std::collections::HashSet::new();
+        let unique: Vec<_> = issues
+            .into_iter()
+            .filter(|i| seen.insert(i.number))
+            .collect();
+
+        assert_eq!(unique.len(), 2);
+        assert_eq!(unique[0].number, 1);
+        assert_eq!(unique[1].number, 2);
     }
 }
