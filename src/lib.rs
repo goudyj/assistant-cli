@@ -3,6 +3,7 @@ pub mod config;
 pub mod github;
 pub mod issues;
 pub mod llm;
+pub mod tui;
 
 #[cfg(test)]
 pub mod test_helpers;

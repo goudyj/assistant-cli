@@ -8,6 +8,18 @@ pub struct ProjectConfig {
     pub owner: String,
     pub repo: String,
     pub labels: Vec<String>,
+    #[serde(default)]
+    pub list_commands: HashMap<String, Vec<String>>,
+}
+
+impl ProjectConfig {
+    pub fn get_list_command_labels(&self, command_name: &str) -> Option<&Vec<String>> {
+        self.list_commands.get(command_name)
+    }
+
+    pub fn list_command_names(&self) -> Vec<&String> {
+        self.list_commands.keys().collect()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -16,6 +28,8 @@ pub struct Config {
     pub projects: HashMap<String, ProjectConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_project: Option<String>,
+    #[serde(default)]
+    pub auto_format_comments: bool,
 }
 
 #[derive(Debug)]
@@ -137,5 +151,52 @@ mod tests {
         let config: Config = serde_json::from_str(json).unwrap();
         let projects = config.list_projects();
         assert_eq!(projects.len(), 2);
+    }
+
+    #[test]
+    fn deserialize_config_with_list_commands() {
+        let json = r#"{
+            "auto_format_comments": true,
+            "projects": {
+                "test": {
+                    "owner": "user",
+                    "repo": "repo",
+                    "labels": ["bug"],
+                    "list_commands": {
+                        "bugs": ["Bug"],
+                        "customer": ["Bug", "customer"]
+                    }
+                }
+            }
+        }"#;
+
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert!(config.auto_format_comments);
+
+        let project = config.get_project("test").unwrap();
+        assert_eq!(project.list_commands.len(), 2);
+        assert_eq!(
+            project.get_list_command_labels("bugs"),
+            Some(&vec!["Bug".to_string()])
+        );
+        assert_eq!(
+            project.get_list_command_labels("customer"),
+            Some(&vec!["Bug".to_string(), "customer".to_string()])
+        );
+    }
+
+    #[test]
+    fn backward_compatible_without_list_commands() {
+        let json = r#"{
+            "projects": {
+                "test": { "owner": "a", "repo": "r", "labels": [] }
+            }
+        }"#;
+
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert!(!config.auto_format_comments);
+
+        let project = config.get_project("test").unwrap();
+        assert!(project.list_commands.is_empty());
     }
 }

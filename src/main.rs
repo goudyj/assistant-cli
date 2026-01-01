@@ -3,19 +3,22 @@ use assistant::config::{self, Config, ProjectConfig};
 use assistant::github::GitHubConfig;
 use assistant::issues::{self, IssueContent};
 use assistant::llm;
+use assistant::tui;
 use crossterm::{
     execute,
     style::{Color, Print, ResetColor, SetForegroundColor},
 };
 use dialoguer::{theme::ColorfulTheme, Select};
-use reedline::{DefaultPrompt, Reedline, Signal};
+use reedline::{Completer, DefaultPrompt, Reedline, Signal, Span, Suggestion};
 use std::io;
+use std::sync::{Arc, RwLock};
 
 struct AppState {
     config: Option<Config>,
     current_project: Option<ProjectConfig>,
     current_project_name: Option<String>,
     issue_session: Option<IssueSession>,
+    cached_token: Option<String>,
 }
 
 struct IssueSession {
@@ -23,15 +26,93 @@ struct IssueSession {
     messages: Vec<llm::Message>,
 }
 
+/// Static commands that are always available
+const STATIC_COMMANDS: &[&str] = &[
+    "/login",
+    "/logout",
+    "/repository",
+    "/repo",
+    "/issue",
+    "/ok",
+    "/help",
+    "/quit",
+    "/exit",
+];
+
+/// Completer that provides both static and dynamic commands
+struct AssistantCompleter {
+    dynamic_commands: Arc<RwLock<Vec<String>>>,
+}
+
+impl AssistantCompleter {
+    fn new() -> Self {
+        Self {
+            dynamic_commands: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+
+    fn get_dynamic_commands(&self) -> Vec<String> {
+        self.dynamic_commands
+            .read()
+            .map(|cmds| cmds.clone())
+            .unwrap_or_default()
+    }
+}
+
+impl Completer for AssistantCompleter {
+    fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
+        if !line.starts_with('/') {
+            return vec![];
+        }
+
+        let prefix = &line[..pos];
+        let mut suggestions = Vec::new();
+
+        for cmd in STATIC_COMMANDS {
+            if cmd.starts_with(prefix) {
+                suggestions.push(Suggestion {
+                    value: cmd.to_string(),
+                    description: None,
+                    style: None,
+                    extra: None,
+                    span: Span::new(0, pos),
+                    append_whitespace: true,
+                    match_indices: None,
+                });
+            }
+        }
+
+        for cmd in self.get_dynamic_commands() {
+            if cmd.starts_with(prefix) {
+                suggestions.push(Suggestion {
+                    value: cmd.clone(),
+                    description: Some("list issues".to_string()),
+                    style: None,
+                    extra: None,
+                    span: Span::new(0, pos),
+                    append_whitespace: false,
+                    match_indices: None,
+                });
+            }
+        }
+
+        suggestions
+    }
+}
+
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
+
+    // Load token once at startup to avoid repeated keyring prompts
+    let cached_token = auth::get_stored_token().ok();
 
     let mut state = AppState {
         config: None,
         current_project: None,
         current_project_name: None,
         issue_session: None,
+        cached_token,
     };
 
     match config::load_config() {
@@ -75,7 +156,7 @@ async fn main() {
         }
     }
 
-    if auth::is_logged_in() {
+    if state.cached_token.is_some() {
         print_colored_message("GitHub: logged in\n", Color::Green);
     } else {
         print_colored_message("GitHub: not logged in. Use /login to authenticate.\n", Color::DarkYellow);
@@ -86,7 +167,19 @@ async fn main() {
         Color::DarkMagenta,
     );
 
-    let mut rl = Reedline::create();
+    // Create completer with shared dynamic commands
+    let completer = AssistantCompleter::new();
+    let dynamic_commands_ref = Arc::clone(&completer.dynamic_commands);
+
+    // Initialize dynamic commands from current project if any
+    if let Some(ref project) = state.current_project {
+        let cmds: Vec<String> = project.list_command_names().into_iter().cloned().collect();
+        if let Ok(mut dc) = dynamic_commands_ref.write() {
+            *dc = cmds.into_iter().map(|c| format!("/{}", c)).collect();
+        }
+    }
+
+    let mut rl = Reedline::create().with_completer(Box::new(completer));
     let prompt = DefaultPrompt::default();
 
     loop {
@@ -108,15 +201,15 @@ async fn main() {
                 "/quit" | "/exit" => break,
 
                 "/login" => {
-                    handle_login_command(&state).await;
+                    handle_login_command(&mut state).await;
                 }
 
                 "/logout" => {
-                    handle_logout_command();
+                    handle_logout_command(&mut state);
                 }
 
                 "/repository" | "/repo" => {
-                    handle_repository_command(rest, &mut state);
+                    handle_repository_command(rest, &mut state, &dynamic_commands_ref);
                 }
 
                 "/issue" => {
@@ -135,7 +228,17 @@ async fn main() {
                     print_help(&state);
                 }
 
-                _ => print_colored_message("Unknown command. Type /help.\n", Color::DarkMagenta),
+                _ => {
+                    // Check if it's a dynamic list command
+                    let cmd_name = command.trim_start_matches('/');
+                    if let Some(ref project) = state.current_project {
+                        if let Some(labels) = project.get_list_command_labels(cmd_name) {
+                            handle_list_command(labels.clone(), &state).await;
+                            continue;
+                        }
+                    }
+                    print_colored_message("Unknown command. Type /help.\n", Color::DarkMagenta);
+                }
             }
             continue;
         }
@@ -151,8 +254,8 @@ async fn main() {
     }
 }
 
-async fn handle_login_command(state: &AppState) {
-    if auth::is_logged_in() {
+async fn handle_login_command(state: &mut AppState) {
+    if state.cached_token.is_some() {
         print_colored_message("Already logged in. Use /logout first to re-authenticate.\n", Color::DarkYellow);
         return;
     }
@@ -200,6 +303,7 @@ async fn handle_login_command(state: &AppState) {
                 print_colored_message(&format!("Failed to store token: {}\n", e), Color::Red);
                 return;
             }
+            state.cached_token = Some(token);
             print_colored_message("Successfully logged in to GitHub!\n", Color::Green);
         }
         Err(e) => {
@@ -208,14 +312,21 @@ async fn handle_login_command(state: &AppState) {
     }
 }
 
-fn handle_logout_command() {
+fn handle_logout_command(state: &mut AppState) {
     match auth::delete_token() {
-        Ok(_) => print_colored_message("Logged out from GitHub.\n", Color::Green),
+        Ok(_) => {
+            state.cached_token = None;
+            print_colored_message("Logged out from GitHub.\n", Color::Green);
+        }
         Err(e) => print_colored_message(&format!("Logout failed: {}\n", e), Color::Red),
     }
 }
 
-fn handle_repository_command(name: &str, state: &mut AppState) {
+fn handle_repository_command(
+    name: &str,
+    state: &mut AppState,
+    dynamic_commands: &Arc<RwLock<Vec<String>>>,
+) {
     let Some(ref mut cfg) = state.config else {
         print_colored_message(
             "No config loaded. Create ~/.config/assistant.json\n",
@@ -265,6 +376,19 @@ fn handle_repository_command(name: &str, state: &mut AppState) {
                 ),
                 Color::Green,
             );
+
+            // Update dynamic commands for autocomplete
+            let cmds: Vec<String> = project.list_command_names().into_iter().cloned().collect();
+            if let Ok(mut dc) = dynamic_commands.write() {
+                *dc = cmds.iter().map(|c| format!("/{}", c)).collect();
+            }
+            if !cmds.is_empty() {
+                print_colored_message(
+                    &format!("List commands: {}\n", cmds.iter().map(|c| format!("/{}", c)).collect::<Vec<_>>().join(", ")),
+                    Color::Green,
+                );
+            }
+
             state.current_project = Some(project.clone());
             state.current_project_name = Some(selected_name.clone());
             state.issue_session = None;
@@ -319,6 +443,49 @@ async fn handle_issue_command(description: &str, state: &mut AppState) {
     }
 }
 
+async fn handle_list_command(labels: Vec<String>, state: &AppState) {
+    let Some(ref project) = state.current_project else {
+        print_colored_message("No project selected.\n", Color::DarkYellow);
+        return;
+    };
+
+    let Some(ref token) = state.cached_token else {
+        print_colored_message("Not authenticated. Use /login first.\n", Color::Red);
+        return;
+    };
+
+    let github = GitHubConfig::new(project.owner.clone(), project.repo.clone(), token.clone());
+
+    // Use cached token for image downloads
+    let github_token = state.cached_token.clone();
+
+    print_colored_message("Fetching issues...\n", Color::DarkMagenta);
+
+    match github.list_issues(&labels, 20).await {
+        Ok(issues) => {
+            if issues.is_empty() {
+                print_colored_message("No issues found with those labels.\n", Color::DarkYellow);
+                return;
+            }
+
+            let auto_format = state
+                .config
+                .as_ref()
+                .map(|c| c.auto_format_comments)
+                .unwrap_or(false);
+
+            if let Err(e) =
+                tui::run_issue_browser(issues, github, github_token, auto_format, &llm::default_endpoint()).await
+            {
+                print_colored_message(&format!("TUI error: {}\n", e), Color::Red);
+            }
+        }
+        Err(e) => {
+            print_colored_message(&format!("Failed to fetch issues: {}\n", e), Color::Red);
+        }
+    }
+}
+
 async fn handle_ok_command(state: &mut AppState) {
     let Some(ref session) = state.issue_session else {
         print_colored_message("No issue to create. Use /issue first.\n", Color::DarkYellow);
@@ -330,13 +497,12 @@ async fn handle_ok_command(state: &mut AppState) {
         return;
     };
 
-    let github = match GitHubConfig::from_keyring(project.owner.clone(), project.repo.clone()) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            print_colored_message(&format!("{}\n", e), Color::Red);
-            return;
-        }
+    let Some(ref token) = state.cached_token else {
+        print_colored_message("Not authenticated. Use /login first.\n", Color::Red);
+        return;
     };
+
+    let github = GitHubConfig::new(project.owner.clone(), project.repo.clone(), token.clone());
 
     match github.create_issue(&session.issue).await {
         Ok(url) => {
@@ -369,12 +535,23 @@ fn print_help(state: &AppState) {
                 "\nCurrent project: {}/{}\n",
                 project.owner, project.repo
             ));
+
+            if !project.list_commands.is_empty() {
+                help.push_str("\nList commands:\n");
+                for (name, labels) in &project.list_commands {
+                    help.push_str(&format!(
+                        "  /{:<16} - List issues with: {}\n",
+                        name,
+                        labels.join(", ")
+                    ));
+                }
+            }
         }
 
-        if auth::is_logged_in() {
-            help.push_str("GitHub: logged in\n");
+        if state.cached_token.is_some() {
+            help.push_str("\nGitHub: logged in\n");
         } else {
-            help.push_str("GitHub: not logged in\n");
+            help.push_str("\nGitHub: not logged in\n");
         }
 
         print_colored_message(&help, Color::DarkMagenta);
