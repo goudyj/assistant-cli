@@ -1,4 +1,7 @@
-use assistant::agents::{kill_agent, SessionManager};
+use assistant::agents::{
+    attach_tmux_command, is_tmux_session_running, kill_agent, list_tmux_sessions,
+    tmux_session_name, SessionManager,
+};
 use assistant::auth::{self, DeviceFlowAuth};
 use assistant::config::{self, Config, ProjectConfig};
 use assistant::github::GitHubConfig;
@@ -38,6 +41,8 @@ const STATIC_COMMANDS: &[&str] = &[
     "/issue",
     "/ok",
     "/agents",
+    "/sessions",
+    "/attach",
     "/help",
     "/quit",
     "/exit",
@@ -237,6 +242,14 @@ async fn main() {
 
                 "/agents" => {
                     handle_agents_command(rest, &state).await;
+                }
+
+                "/sessions" => {
+                    handle_sessions_command(&state);
+                }
+
+                "/attach" => {
+                    handle_attach_command(rest, &state);
                 }
 
                 _ => {
@@ -634,6 +647,8 @@ fn print_help(state: &AppState) {
         help.push_str("  /issue <desc>       - Generate an issue from description\n");
         help.push_str("  /ok                 - Create the issue on GitHub\n");
         help.push_str("  /agents             - View agent sessions (Claude Code)\n");
+        help.push_str("  /sessions           - List active tmux agent sessions\n");
+        help.push_str("  /attach <issue#>    - Show command to attach to agent session\n");
         help.push_str("  /quit               - Exit\n");
 
         if let Some(ref project) = state.current_project {
@@ -864,6 +879,116 @@ async fn handle_agents_command(args: &str, state: &AppState) {
             );
         }
     }
+}
+
+fn handle_sessions_command(state: &AppState) {
+    let Some(ref project_name) = state.current_project_name else {
+        print_colored_message(
+            "No project selected. Use /repository <name> first.\n",
+            Color::DarkYellow,
+        );
+        return;
+    };
+
+    // List tmux sessions
+    let sessions = list_tmux_sessions();
+    let project_sessions: Vec<_> = sessions
+        .iter()
+        .filter(|s| s.starts_with(project_name))
+        .collect();
+
+    if project_sessions.is_empty() {
+        print_colored_message("No active agent sessions.\n", Color::DarkMagenta);
+        print_colored_message(
+            "Tip: Dispatch an issue with 'd' in the issue browser.\n",
+            Color::DarkMagenta,
+        );
+        return;
+    }
+
+    print_colored_message("Active tmux sessions:\n", Color::Cyan);
+    for session_name in &project_sessions {
+        // Extract issue number from session name
+        let status = if is_tmux_session_running(session_name) {
+            "running"
+        } else {
+            "stopped"
+        };
+        print_colored_message(
+            &format!("  {} ({})\n", session_name, status),
+            Color::Green,
+        );
+    }
+    print_colored_message(
+        "\nUse /attach <issue-number> to join a session.\n",
+        Color::DarkMagenta,
+    );
+}
+
+fn handle_attach_command(args: &str, state: &AppState) {
+    let Some(ref project_name) = state.current_project_name else {
+        print_colored_message(
+            "No project selected. Use /repository <name> first.\n",
+            Color::DarkYellow,
+        );
+        return;
+    };
+
+    if args.is_empty() {
+        // List available sessions
+        let sessions = list_tmux_sessions();
+        let project_sessions: Vec<_> = sessions
+            .iter()
+            .filter(|s| s.starts_with(project_name))
+            .collect();
+
+        if project_sessions.is_empty() {
+            print_colored_message("No active sessions to attach to.\n", Color::DarkYellow);
+        } else {
+            print_colored_message("Available sessions:\n", Color::Cyan);
+            for s in &project_sessions {
+                print_colored_message(&format!("  {}\n", s), Color::Green);
+            }
+            print_colored_message(
+                "\nUsage: /attach <issue-number>\n",
+                Color::DarkMagenta,
+            );
+        }
+        return;
+    }
+
+    // Parse issue number
+    let issue_number: u64 = match args.parse() {
+        Ok(n) => n,
+        Err(_) => {
+            print_colored_message("Invalid issue number.\n", Color::Red);
+            return;
+        }
+    };
+
+    let session_name = tmux_session_name(project_name, issue_number);
+
+    if !is_tmux_session_running(&session_name) {
+        print_colored_message(
+            &format!("No active session for issue #{}.\n", issue_number),
+            Color::DarkYellow,
+        );
+        return;
+    }
+
+    // Print the command to attach
+    let cmd = attach_tmux_command(&session_name);
+    print_colored_message(
+        &format!(
+            "Run this command in your terminal to attach:\n\n  {}\n\n",
+            cmd
+        ),
+        Color::Cyan,
+    );
+    print_colored_message(
+        "Tip: Use Ctrl+B then D to detach from the session.\n",
+        Color::DarkMagenta,
+    );
 }
 
 async fn handle_feedback(

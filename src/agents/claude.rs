@@ -1,10 +1,8 @@
 //! Claude Code integration for dispatching issues.
 
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::fs;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
@@ -16,8 +14,8 @@ use crate::github::IssueDetail;
 
 /// Dispatch an issue to Claude Code for processing.
 ///
-/// This creates a git worktree, launches Claude Code in the background,
-/// and returns immediately with a session handle.
+/// This creates a git worktree, launches Claude Code in an interactive
+/// tmux session, and returns immediately with a session handle.
 pub async fn dispatch_to_claude(
     issue: &IssueDetail,
     local_path: &Path,
@@ -32,23 +30,25 @@ pub async fn dispatch_to_claude(
     let log_dir = agents_log_dir();
     fs::create_dir_all(&log_dir)?;
 
-    // Create log file
+    // Create log file (for session metadata, not claude output anymore)
     let log_file = log_dir.join(format!("{}.log", session_id));
 
     // Build the prompt
     let prompt = build_prompt(issue);
 
-    // Launch Claude Code
-    let child = launch_claude(&worktree_path, &prompt, &log_file)?;
-    let pid = child.id();
+    // Get tmux session name
+    let tmux_name = tmux_session_name(project, issue.number);
 
-    // Create session
+    // Launch Claude Code in tmux
+    launch_claude_tmux(&worktree_path, &prompt, &tmux_name)?;
+
+    // Create session (pid is 0 since we use tmux now)
     let session = AgentSession::new(
         session_id.clone(),
         issue.number,
         issue.title.clone(),
         project.to_string(),
-        pid,
+        0, // No direct PID, we use tmux session name
         log_file.clone(),
         worktree_path.clone(),
         branch_name,
@@ -59,8 +59,8 @@ pub async fn dispatch_to_claude(
     manager.add(session.clone());
     manager.save()?;
 
-    // Start monitoring thread
-    start_monitoring(session_id, child, worktree_path, log_file);
+    // Start monitoring thread for tmux session
+    start_tmux_monitoring(session_id, tmux_name, worktree_path);
 
     Ok(session)
 }
@@ -79,42 +79,113 @@ fn build_prompt(issue: &IssueDetail) -> String {
     prompt
 }
 
-/// Launch Claude Code as a background process.
-fn launch_claude(worktree_path: &Path, prompt: &str, log_file: &Path) -> Result<Child, AgentError> {
-    let log = File::create(log_file)?;
-    let log_err = log.try_clone()?;
+/// Launch Claude Code in an interactive tmux session.
+fn launch_claude_tmux(
+    worktree_path: &Path,
+    prompt: &str,
+    session_name: &str,
+) -> Result<(), AgentError> {
+    // Escape single quotes in prompt for shell
+    let escaped_prompt = prompt.replace('\'', "'\\''");
 
-    let child = Command::new("claude")
-        .current_dir(worktree_path)
-        .args(["-p", prompt])
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(log_err))
-        .spawn()
-        .map_err(|e| AgentError::ProcessError(format!("Failed to launch claude: {}", e)))?;
+    // Build the claude command with the initial prompt
+    let claude_cmd = format!("cd '{}' && claude '{}'", worktree_path.display(), escaped_prompt);
 
-    Ok(child)
+    // Create tmux session in detached mode
+    let status = Command::new("tmux")
+        .args([
+            "new-session",
+            "-d",
+            "-s",
+            session_name,
+            "-x",
+            "200",
+            "-y",
+            "50",
+            "bash",
+            "-c",
+            &claude_cmd,
+        ])
+        .status()
+        .map_err(|e| AgentError::ProcessError(format!("Failed to launch tmux: {}", e)))?;
+
+    if !status.success() {
+        return Err(AgentError::ProcessError(
+            "Failed to create tmux session".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
-/// Start a monitoring thread for the Claude process.
-fn start_monitoring(
+/// Get the tmux session name for an issue.
+pub fn tmux_session_name(project: &str, issue_number: u64) -> String {
+    format!("{}-issue-{}", project, issue_number)
+}
+
+/// Check if a tmux session exists and is running.
+pub fn is_tmux_session_running(session_name: &str) -> bool {
+    Command::new("tmux")
+        .args(["has-session", "-t", session_name])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// List all tmux sessions for the assistant.
+pub fn list_tmux_sessions() -> Vec<String> {
+    let output = Command::new("tmux")
+        .args(["list-sessions", "-F", "#{session_name}"])
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter(|s| s.contains("-issue-"))
+                .map(|s| s.to_string())
+                .collect()
+        }
+        _ => vec![],
+    }
+}
+
+/// Attach to a tmux session (returns the command to run).
+pub fn attach_tmux_command(session_name: &str) -> String {
+    format!("tmux attach -t {}", session_name)
+}
+
+/// Kill a tmux session.
+pub fn kill_tmux_session(session_name: &str) -> Result<(), AgentError> {
+    let status = Command::new("tmux")
+        .args(["kill-session", "-t", session_name])
+        .status()
+        .map_err(|e| AgentError::ProcessError(format!("Failed to kill tmux session: {}", e)))?;
+
+    if !status.success() {
+        return Err(AgentError::ProcessError(
+            "Failed to kill tmux session".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Start a monitoring thread for the tmux session.
+fn start_tmux_monitoring(
     session_id: String,
-    child: Child,
+    tmux_name: String,
     worktree_path: std::path::PathBuf,
-    log_file: std::path::PathBuf,
 ) {
     thread::spawn(move || {
-        let child = Arc::new(Mutex::new(child));
-        let child_clone = Arc::clone(&child);
-
         loop {
             thread::sleep(Duration::from_secs(5));
 
-            // Update stats
+            // Update stats from git diff
             let (lines_added, lines_deleted, files_changed) = get_diff_stats(&worktree_path);
-            let lines_output = count_log_lines(&log_file);
 
             let stats = AgentStats {
-                lines_output,
+                lines_output: 0, // We don't track output lines with tmux
                 lines_added,
                 lines_deleted,
                 files_changed,
@@ -125,103 +196,50 @@ fn start_monitoring(
             manager.update_stats(&session_id, stats);
             let _ = manager.save();
 
-            // Check if process is done
-            let mut child = child_clone.lock().unwrap();
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    // Process finished
-                    let new_status = if status.success() {
-                        AgentStatus::Completed {
-                            exit_code: status.code().unwrap_or(0),
-                        }
-                    } else {
-                        AgentStatus::Failed {
-                            error: format!("Exit code: {}", status.code().unwrap_or(-1)),
-                        }
-                    };
+            // Check if tmux session is still running
+            if !is_tmux_session_running(&tmux_name) {
+                // Session ended - mark as completed
+                let new_status = AgentStatus::Completed { exit_code: 0 };
 
-                    let mut manager = SessionManager::load();
-                    manager.update_status(&session_id, new_status.clone());
-                    let _ = manager.save();
+                let mut manager = SessionManager::load();
+                manager.update_status(&session_id, new_status);
+                let _ = manager.save();
 
-                    // Send notification
-                    if let Some(session) = manager.get(&session_id) {
-                        let title = "Claude Code";
-                        let message = match &new_status {
-                            AgentStatus::Completed { .. } => {
-                                format!("Finished issue #{}", session.issue_number)
-                            }
-                            AgentStatus::Failed { error } => {
-                                format!("Failed issue #{}: {}", session.issue_number, error)
-                            }
-                            _ => String::new(),
-                        };
-                        send_notification(title, &message);
-                    }
+                // Send notification
+                if let Some(session) = manager.get(&session_id) {
+                    let title = "Claude Code";
+                    let message = format!("Session ended for issue #{}", session.issue_number);
+                    send_notification(title, &message);
+                }
 
-                    break;
-                }
-                Ok(None) => {
-                    // Still running
-                }
-                Err(e) => {
-                    // Error checking status
-                    let mut manager = SessionManager::load();
-                    manager.update_status(
-                        &session_id,
-                        AgentStatus::Failed {
-                            error: format!("Monitor error: {}", e),
-                        },
-                    );
-                    let _ = manager.save();
-                    break;
-                }
+                break;
             }
         }
     });
 }
 
-/// Count lines in a log file.
-fn count_log_lines(log_file: &Path) -> usize {
-    if let Ok(file) = File::open(log_file) {
-        BufReader::new(file).lines().count()
-    } else {
-        0
-    }
-}
 
-/// Kill an agent by session ID.
+/// Kill an agent by session ID (kills the tmux session).
 pub fn kill_agent(session_id: &str) -> Result<(), AgentError> {
     let manager = SessionManager::load();
 
     if let Some(session) = manager.get(session_id)
-        && session.is_running() {
-            // Try to kill the process
-            #[cfg(unix)]
-            {
-                let _ = Command::new("kill")
-                    .args(["-9", &session.pid.to_string()])
-                    .status();
-            }
+        && session.is_running()
+    {
+        // Build tmux session name and kill it
+        let tmux_name = tmux_session_name(&session.project, session.issue_number);
+        let _ = kill_tmux_session(&tmux_name);
 
-            #[cfg(not(unix))]
-            {
-                // On Windows, use taskkill
-                let _ = Command::new("taskkill")
-                    .args(["/F", "/PID", &session.pid.to_string()])
-                    .status();
-            }
-
-            // Update status
-            let mut manager = SessionManager::load();
-            manager.update_status(
-                session_id,
-                AgentStatus::Failed {
-                    error: "Killed by user".to_string(),
-                },
-            );
-            manager.save()?;
-        }
+        // Update status
+        let mut manager = SessionManager::load();
+        manager.update_status(
+            session_id,
+            AgentStatus::Failed {
+                error: "Killed by user".to_string(),
+            },
+        );
+        manager.save()?;
+    }
 
     Ok(())
 }
@@ -294,12 +312,6 @@ mod tests {
         let prompt = build_prompt(&issue);
         assert!(prompt.contains("Fix GitHub issue #456"));
         assert!(prompt.contains("Another issue"));
-    }
-
-    #[test]
-    fn count_log_lines_nonexistent() {
-        let count = count_log_lines(Path::new("/nonexistent/file.log"));
-        assert_eq!(count, 0);
     }
 
     #[test]

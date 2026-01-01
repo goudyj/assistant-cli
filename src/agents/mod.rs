@@ -4,7 +4,10 @@ mod claude;
 mod session;
 mod worktree;
 
-pub use claude::{create_pr, dispatch_to_claude, kill_agent};
+pub use claude::{
+    attach_tmux_command, create_pr, dispatch_to_claude, is_tmux_session_running, kill_agent,
+    list_tmux_sessions, tmux_session_name,
+};
 pub use session::{AgentSession, AgentStats, AgentStatus, SessionManager};
 pub use worktree::{create_worktree, get_diff_stats, remove_worktree, WorktreeError};
 
