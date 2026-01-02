@@ -395,6 +395,9 @@ pub async fn run_issue_browser_with_pagination(
         browser.set_project_info(name, path);
     }
 
+    // Resume monitoring threads for any running sessions from previous process
+    crate::agents::resume_monitoring_for_running_sessions();
+
     while !browser.should_quit {
         // Auto-refresh session cache every 2 seconds when in List view
         if matches!(browser.view, TuiView::List)

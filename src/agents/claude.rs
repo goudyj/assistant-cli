@@ -299,6 +299,26 @@ fn start_tmux_monitoring(
     });
 }
 
+/// Resume monitoring threads for all running sessions.
+///
+/// This should be called when the TUI starts to ensure stats are updated
+/// for sessions that were started in a previous process.
+pub fn resume_monitoring_for_running_sessions() {
+    let manager = SessionManager::load();
+
+    for session in manager.running() {
+        let tmux_name = tmux_session_name(&session.project, session.issue_number);
+
+        // Only start monitoring if tmux session is actually running
+        if is_tmux_session_running(&tmux_name) {
+            start_tmux_monitoring(
+                session.id.clone(),
+                tmux_name,
+                session.worktree_path.clone(),
+            );
+        }
+    }
+}
 
 /// Kill an agent by session ID (kills the tmux session).
 pub fn kill_agent(session_id: &str) -> Result<(), AgentError> {
