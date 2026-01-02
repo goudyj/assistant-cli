@@ -213,6 +213,12 @@ fn is_claude_idle(pane_content: &str) -> bool {
         if trimmed.contains("Enter to select") {
             return true;
         }
+
+        // Claude Code shows authorization prompt
+        // Pattern: "Esc to cancel" at the end of permission dialogs
+        if trimmed == "Esc to cancel" {
+            return true;
+        }
     }
 
     false
@@ -483,6 +489,13 @@ mod tests {
     fn idle_detection_question_dialog() {
         // Claude Code selection dialog
         let content = "Quel type de fichier?\n1. JSON\n2. YAML\nEnter to select · Tab/Arrow keys to navigate · Esc to cancel\n";
+        assert!(is_claude_idle(content));
+    }
+
+    #[test]
+    fn idle_detection_authorization_prompt() {
+        // Claude Code authorization/permission dialog
+        let content = "Bash command\nuv run python --version\nDo you want to proceed?\n1. Yes\n2. Yes, and don't ask again\nEsc to cancel\n";
         assert!(is_claude_idle(content));
     }
 }
