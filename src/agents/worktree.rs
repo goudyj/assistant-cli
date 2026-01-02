@@ -207,70 +207,88 @@ pub fn remove_worktree(
 
 /// Get git diff stats for a worktree.
 ///
+/// Compares current HEAD against the merge-base with main/master branch
+/// to show all changes since the branch was created.
+///
 /// # Returns
 /// * (lines_added, lines_deleted, files_changed)
 pub fn get_diff_stats(worktree_path: &Path) -> (usize, usize, usize) {
+    // Find the merge-base with main or master branch
+    let base_commit = find_merge_base(worktree_path);
+
+    if let Some(base) = base_commit {
+        // Compare HEAD against the merge-base (includes both committed and uncommitted changes)
+        let output = Command::new("git")
+            .current_dir(worktree_path)
+            .args(["diff", "--numstat", &base])
+            .output()
+            .ok();
+
+        if let Some(output) = output
+            && output.status.success()
+        {
+            return parse_numstat(&String::from_utf8_lossy(&output.stdout));
+        }
+    }
+
+    // Fallback: try diff of uncommitted changes only
     let output = Command::new("git")
         .current_dir(worktree_path)
-        .args(["diff", "--numstat", "HEAD~1"])
+        .args(["diff", "--numstat", "HEAD"])
         .output()
         .ok();
 
     if let Some(output) = output
-        && output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let mut lines_added = 0;
-            let mut lines_deleted = 0;
-            let mut files_changed = 0;
-
-            for line in stdout.lines() {
-                let parts: Vec<&str> = line.split('\t').collect();
-                if parts.len() >= 2 {
-                    files_changed += 1;
-                    // Parts[0] is additions, parts[1] is deletions
-                    if let Ok(added) = parts[0].parse::<usize>() {
-                        lines_added += added;
-                    }
-                    if let Ok(deleted) = parts[1].parse::<usize>() {
-                        lines_deleted += deleted;
-                    }
-                }
-            }
-
-            return (lines_added, lines_deleted, files_changed);
-        }
-
-    // Fallback: try diff from initial state
-    let output = Command::new("git")
-        .current_dir(worktree_path)
-        .args(["diff", "--numstat"])
-        .output()
-        .ok();
-
-    if let Some(output) = output
-        && output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let mut lines_added = 0;
-            let mut lines_deleted = 0;
-            let mut files_changed = 0;
-
-            for line in stdout.lines() {
-                let parts: Vec<&str> = line.split('\t').collect();
-                if parts.len() >= 2 {
-                    files_changed += 1;
-                    if let Ok(added) = parts[0].parse::<usize>() {
-                        lines_added += added;
-                    }
-                    if let Ok(deleted) = parts[1].parse::<usize>() {
-                        lines_deleted += deleted;
-                    }
-                }
-            }
-
-            return (lines_added, lines_deleted, files_changed);
-        }
+        && output.status.success()
+    {
+        return parse_numstat(&String::from_utf8_lossy(&output.stdout));
+    }
 
     (0, 0, 0)
+}
+
+/// Find the merge-base commit with main or master branch.
+fn find_merge_base(worktree_path: &Path) -> Option<String> {
+    // Try main first, then master
+    for branch in ["main", "master"] {
+        let output = Command::new("git")
+            .current_dir(worktree_path)
+            .args(["merge-base", "HEAD", branch])
+            .output()
+            .ok();
+
+        if let Some(output) = output
+            && output.status.success()
+        {
+            let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !commit.is_empty() {
+                return Some(commit);
+            }
+        }
+    }
+    None
+}
+
+/// Parse git diff --numstat output into (lines_added, lines_deleted, files_changed).
+fn parse_numstat(stdout: &str) -> (usize, usize, usize) {
+    let mut lines_added = 0;
+    let mut lines_deleted = 0;
+    let mut files_changed = 0;
+
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() >= 2 {
+            files_changed += 1;
+            if let Ok(added) = parts[0].parse::<usize>() {
+                lines_added += added;
+            }
+            if let Ok(deleted) = parts[1].parse::<usize>() {
+                lines_deleted += deleted;
+            }
+        }
+    }
+
+    (lines_added, lines_deleted, files_changed)
 }
 
 #[cfg(test)]
