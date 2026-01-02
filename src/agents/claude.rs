@@ -283,7 +283,7 @@ fn start_tmux_monitoring(
                         if let Some(session) = manager.get(&session_id) {
                             let title = "Claude Code";
                             let message = format!(
-                                "Task completed for issue #{} (+{} -{})",
+                                "Awaiting input for issue #{} (+{} -{})",
                                 session.issue_number,
                                 stats_copy.lines_added,
                                 stats_copy.lines_deleted
