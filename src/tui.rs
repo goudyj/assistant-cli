@@ -86,6 +86,8 @@ pub struct IssueBrowser {
     pub session_cache: std::collections::HashMap<u64, crate::agents::AgentSession>,
     // Embedded terminal for tmux sessions
     pub embedded_term: Option<crate::embedded_term::EmbeddedTerminal>,
+    // Last session cache refresh time
+    pub last_session_refresh: std::time::Instant,
 }
 
 impl IssueBrowser {
@@ -149,6 +151,7 @@ impl IssueBrowser {
             selected_issues: std::collections::HashSet::new(),
             session_cache: std::collections::HashMap::new(),
             embedded_term: None,
+            last_session_refresh: std::time::Instant::now(),
         }
     }
 
@@ -393,6 +396,16 @@ pub async fn run_issue_browser_with_pagination(
     }
 
     while !browser.should_quit {
+        // Auto-refresh session cache every 2 seconds when in List view
+        if matches!(browser.view, TuiView::List)
+            && browser.last_session_refresh.elapsed() >= std::time::Duration::from_secs(2)
+        {
+            if let Some(project) = browser.project_name.clone() {
+                browser.refresh_sessions(&project);
+            }
+            browser.last_session_refresh = std::time::Instant::now();
+        }
+
         terminal.draw(|f| draw_ui(f, &mut browser))?;
 
         if event::poll(std::time::Duration::from_millis(100))?
