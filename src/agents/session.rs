@@ -12,6 +12,7 @@ use super::{cache_dir, sessions_file};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum AgentStatus {
     Running,
+    Awaiting,
     Completed { exit_code: i32 },
     Failed { error: String },
 }
@@ -88,8 +89,14 @@ impl AgentSession {
     }
 
     /// Check if the session is still running (based on stored status only)
+    /// Note: Awaiting is also considered "running" since tmux session is active
     pub fn is_running(&self) -> bool {
-        matches!(self.status, AgentStatus::Running)
+        matches!(self.status, AgentStatus::Running | AgentStatus::Awaiting)
+    }
+
+    /// Check if the session is awaiting user input
+    pub fn is_awaiting(&self) -> bool {
+        matches!(self.status, AgentStatus::Awaiting)
     }
 
     /// Get the tmux session name for this session

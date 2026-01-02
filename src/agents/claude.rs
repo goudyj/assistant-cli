@@ -189,12 +189,22 @@ fn capture_tmux_pane(session_name: &str) -> Option<String> {
 /// Returns true if the last lines indicate Claude is waiting for user input.
 fn is_claude_idle(pane_content: &str) -> bool {
     let lines: Vec<&str> = pane_content.lines().collect();
-    let last_lines: Vec<&str> = lines.iter().rev().take(10).copied().collect();
+
+    // Skip empty lines from the end to find the last meaningful line
+    let last_lines: Vec<&str> = lines
+        .iter()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(5)
+        .copied()
+        .collect();
 
     // Claude Code shows ">" prompt when waiting for input
     for line in &last_lines {
-        let trimmed = line.trim();
-        if trimmed == ">" || trimmed.ends_with("> ") {
+        // Trim only leading whitespace to preserve trailing context
+        let trimmed = line.trim_start();
+        // Check for prompt patterns: line is just ">" possibly with trailing space/cursor
+        if trimmed == ">" || trimmed.starts_with("> ") {
             return true;
         }
     }
@@ -252,15 +262,18 @@ fn start_tmux_monitoring(
                 break;
             }
 
-            // Check if Claude is idle (task completed)
-            if !idle_notified {
-                if let Some(pane_content) = capture_tmux_pane(&tmux_name) {
-                    let is_idle = is_claude_idle(&pane_content);
+            // Check if Claude is idle (waiting for user input)
+            if let Some(pane_content) = capture_tmux_pane(&tmux_name) {
+                let is_idle = is_claude_idle(&pane_content);
 
-                    // Only notify if Claude just became idle (was working before)
-                    if is_idle && !was_idle {
-                        // Send notification that task is complete
-                        let manager = SessionManager::load();
+                if is_idle && !was_idle {
+                    // Claude just became idle - update status to Awaiting
+                    let mut manager = SessionManager::load();
+                    manager.update_status(&session_id, AgentStatus::Awaiting);
+                    let _ = manager.save();
+
+                    // Send notification only once
+                    if !idle_notified {
                         if let Some(session) = manager.get(&session_id) {
                             let title = "Claude Code";
                             let message = format!(
@@ -273,9 +286,14 @@ fn start_tmux_monitoring(
                         }
                         idle_notified = true;
                     }
-
-                    was_idle = is_idle;
+                } else if !is_idle && was_idle {
+                    // Claude started working again - update status to Running
+                    let mut manager = SessionManager::load();
+                    manager.update_status(&session_id, AgentStatus::Running);
+                    let _ = manager.save();
                 }
+
+                was_idle = is_idle;
             }
         }
     });
@@ -395,5 +413,41 @@ mod tests {
         assert!(prompt.contains("\"quotes\""));
         assert!(prompt.contains("`backticks`"));
         assert!(prompt.contains("<>&"));
+    }
+
+    #[test]
+    fn idle_detection_simple_prompt() {
+        // Simple prompt on its own line
+        assert!(is_claude_idle("Some output\n>\n"));
+        assert!(is_claude_idle("Some output\n> \n"));
+        assert!(is_claude_idle("Some output\n>"));
+    }
+
+    #[test]
+    fn idle_detection_with_empty_lines() {
+        // Prompt followed by empty lines (common in tmux capture)
+        assert!(is_claude_idle("Some output\n>\n\n\n"));
+        assert!(is_claude_idle("Some output\n> \n\n"));
+    }
+
+    #[test]
+    fn idle_detection_with_leading_space() {
+        // Prompt with leading whitespace
+        assert!(is_claude_idle("Some output\n  >\n"));
+        assert!(is_claude_idle("Some output\n\t> \n"));
+    }
+
+    #[test]
+    fn idle_detection_not_idle() {
+        // Working output (no prompt)
+        assert!(!is_claude_idle("Processing files...\nDone"));
+        assert!(!is_claude_idle("Some output without prompt"));
+    }
+
+    #[test]
+    fn idle_detection_prompt_in_output() {
+        // Prompt character in middle of text should still trigger
+        // because we check last non-empty lines
+        assert!(is_claude_idle("Some > text\n>\n"));
     }
 }

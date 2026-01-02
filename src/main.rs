@@ -763,6 +763,7 @@ async fn handle_agents_command(args: &str, state: &AppState) {
             for session in sessions {
                 let status = match &session.status {
                     assistant::agents::AgentStatus::Running => "Running".to_string(),
+                    assistant::agents::AgentStatus::Awaiting => "Awaiting input".to_string(),
                     assistant::agents::AgentStatus::Completed { exit_code } => format!("Completed ({})", exit_code),
                     assistant::agents::AgentStatus::Failed { error } => format!("Failed: {}", error),
                 };

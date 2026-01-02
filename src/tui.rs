@@ -587,6 +587,7 @@ fn draw_list_view(f: &mut Frame, browser: &mut IssueBrowser) {
                 Some(session) => {
                     let (icon, color) = match &session.status {
                         AgentStatus::Running => ("▶", Color::Yellow),
+                        AgentStatus::Awaiting => ("⏸", Color::Cyan),
                         AgentStatus::Completed { .. } => ("✓", Color::Green),
                         AgentStatus::Failed { .. } => ("✗", Color::Red),
                     };
@@ -1176,12 +1177,14 @@ fn draw_agent_list(f: &mut Frame, sessions: &[crate::agents::AgentSession], sele
         .map(|(i, session)| {
             let status_icon = match &session.status {
                 AgentStatus::Running => "▶",
+                AgentStatus::Awaiting => "⏸",
                 AgentStatus::Completed { .. } => "✓",
                 AgentStatus::Failed { .. } => "✗",
             };
 
             let status_color = match &session.status {
                 AgentStatus::Running => Color::Yellow,
+                AgentStatus::Awaiting => Color::Cyan,
                 AgentStatus::Completed { .. } => Color::Green,
                 AgentStatus::Failed { .. } => Color::Red,
             };
