@@ -178,6 +178,44 @@ impl IssueBrowser {
         }
     }
 
+    /// Refresh session cache with fresh stats calculated from git
+    pub fn refresh_sessions_with_fresh_stats(&mut self, project: &str) {
+        let mut manager = crate::agents::SessionManager::load();
+
+        // Collect running sessions info first to avoid borrow issues
+        let running_sessions: Vec<_> = manager
+            .running()
+            .iter()
+            .map(|s| (s.id.clone(), s.worktree_path.clone()))
+            .collect();
+
+        // Recalculate stats for all running sessions
+        for (session_id, worktree_path) in running_sessions {
+            let (lines_added, lines_deleted, files_changed) =
+                crate::agents::get_diff_stats(&worktree_path);
+            let stats = crate::agents::AgentStats {
+                lines_output: 0,
+                lines_added,
+                lines_deleted,
+                files_changed,
+            };
+            manager.update_stats(&session_id, stats);
+        }
+        let _ = manager.save();
+
+        // Sync with actual tmux state
+        if manager.sync_with_tmux() {
+            let _ = manager.save();
+        }
+
+        self.session_cache.clear();
+        for session in manager.list() {
+            if session.project == project {
+                self.session_cache.insert(session.issue_number, session.clone());
+            }
+        }
+    }
+
     /// Load the next page of issues
     pub async fn load_next_page(&mut self) {
         if !self.has_next_page || self.is_loading {
@@ -2025,9 +2063,9 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                     // Exit embedded terminal and go back to list
                     browser.embedded_term = None;
                     browser.view = TuiView::List;
-                    // Refresh session cache to show updated agent status
+                    // Refresh session cache with fresh stats from git
                     if let Some(project) = browser.project_name.clone() {
-                        browser.refresh_sessions(&project);
+                        browser.refresh_sessions_with_fresh_stats(&project);
                     }
                 }
                 KeyCode::Left => {
