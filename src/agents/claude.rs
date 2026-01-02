@@ -225,14 +225,16 @@ fn is_claude_idle(pane_content: &str) -> bool {
 }
 
 /// Start a monitoring thread for the tmux session.
-fn start_tmux_monitoring(
+/// If `already_awaiting` is true, skip the first idle notification (used when resuming).
+fn start_tmux_monitoring_with_state(
     session_id: String,
     tmux_name: String,
     worktree_path: std::path::PathBuf,
+    already_awaiting: bool,
 ) {
     thread::spawn(move || {
-        let mut was_idle = false;
-        let mut idle_notified = false;
+        let mut was_idle = already_awaiting;
+        let mut idle_notified = already_awaiting;
 
         loop {
             thread::sleep(Duration::from_secs(5));
@@ -313,6 +315,15 @@ fn start_tmux_monitoring(
     });
 }
 
+/// Start a monitoring thread for a new tmux session.
+fn start_tmux_monitoring(
+    session_id: String,
+    tmux_name: String,
+    worktree_path: std::path::PathBuf,
+) {
+    start_tmux_monitoring_with_state(session_id, tmux_name, worktree_path, false);
+}
+
 /// Resume monitoring threads for all running sessions.
 ///
 /// This should be called when the TUI starts to ensure stats are updated
@@ -325,10 +336,13 @@ pub fn resume_monitoring_for_running_sessions() {
 
         // Only start monitoring if tmux session is actually running
         if is_tmux_session_running(&tmux_name) {
-            start_tmux_monitoring(
+            // Pass the current awaiting state to avoid duplicate notifications
+            let already_awaiting = session.is_awaiting();
+            start_tmux_monitoring_with_state(
                 session.id.clone(),
                 tmux_name,
                 session.worktree_path.clone(),
+                already_awaiting,
             );
         }
     }

@@ -1393,7 +1393,11 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                         let project_name = browser.project_name.clone().unwrap_or_default();
                         let local_path = browser.local_path.clone().unwrap();
 
-                        if let Ok(detail) = browser.github.get_issue(issue_number).await {
+                        // Check if a session already exists for this issue
+                        let tmux_name = crate::agents::tmux_session_name(&project_name, issue_number);
+                        if crate::agents::is_tmux_session_running(&tmux_name) {
+                            browser.status_message = Some(format!("Session already running for #{}. Use 't' to open tmux or 'K' to kill it.", issue_number));
+                        } else if let Ok(detail) = browser.github.get_issue(issue_number).await {
                             match crate::agents::dispatch_to_claude(&detail, &local_path, &project_name).await {
                                 Ok(_) => {
                                     browser.status_message = Some(format!("Dispatched #{} to Claude Code.", issue_number));
@@ -1409,18 +1413,30 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                         }
                     }
                 } else {
-                    // Dispatch all selected issues
-                    let count = browser.selected_issues.len();
+                    // Dispatch all selected issues (skip those with existing sessions)
                     let project_name = browser.project_name.clone().unwrap_or_default();
                     let local_path = browser.local_path.clone().unwrap();
+                    let mut dispatched = 0;
+                    let mut skipped = 0;
 
                     for issue_number in browser.selected_issues.iter() {
+                        let tmux_name = crate::agents::tmux_session_name(&project_name, *issue_number);
+                        if crate::agents::is_tmux_session_running(&tmux_name) {
+                            skipped += 1;
+                            continue;
+                        }
                         if let Ok(detail) = browser.github.get_issue(*issue_number).await {
-                            let _ = crate::agents::dispatch_to_claude(&detail, &local_path, &project_name).await;
+                            if crate::agents::dispatch_to_claude(&detail, &local_path, &project_name).await.is_ok() {
+                                dispatched += 1;
+                            }
                         }
                     }
 
-                    browser.status_message = Some(format!("Dispatched {} issues to Claude Code.", count));
+                    if skipped > 0 {
+                        browser.status_message = Some(format!("Dispatched {} issues ({} skipped, already running).", dispatched, skipped));
+                    } else {
+                        browser.status_message = Some(format!("Dispatched {} issues to Claude Code.", dispatched));
+                    }
                     browser.selected_issues.clear();
                     // Refresh session cache
                     if let Some(project) = browser.project_name.clone() {
@@ -1720,9 +1736,21 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                 };
             }
             KeyCode::Char('d') => {
-                // Dispatch to Claude Code
-                let issue_clone = issue.clone();
-                browser.view = TuiView::ConfirmDispatch { issue: issue_clone };
+                // Dispatch to Claude Code - check if session already exists
+                if let Some(project) = browser.project_name.clone() {
+                    let tmux_name = crate::agents::tmux_session_name(&project, issue.number);
+                    if crate::agents::is_tmux_session_running(&tmux_name) {
+                        browser.status_message = Some(format!(
+                            "Session already running for #{}. Use 't' to open tmux or 'K' to kill it.",
+                            issue.number
+                        ));
+                    } else {
+                        let issue_clone = issue.clone();
+                        browser.view = TuiView::ConfirmDispatch { issue: issue_clone };
+                    }
+                } else {
+                    browser.status_message = Some("No project selected".to_string());
+                }
             }
             _ => {}
         },
@@ -1982,16 +2010,25 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                 if let (Some(project), Some(local_path)) =
                     (&browser.project_name, &browser.local_path)
                 {
-                    match crate::agents::dispatch_to_claude(issue, local_path, project).await {
-                        Ok(session) => {
-                            browser.status_message = Some(format!(
-                                "Dispatched #{} to Claude Code (session {})",
-                                number,
-                                &session.id[..8]
-                            ));
-                        }
-                        Err(e) => {
-                            browser.status_message = Some(format!("Failed to dispatch: {}", e));
+                    // Double-check that no session is already running
+                    let tmux_name = crate::agents::tmux_session_name(project, number);
+                    if crate::agents::is_tmux_session_running(&tmux_name) {
+                        browser.status_message = Some(format!(
+                            "Session already running for #{}. Use 't' to open tmux or 'K' to kill it.",
+                            number
+                        ));
+                    } else {
+                        match crate::agents::dispatch_to_claude(issue, local_path, project).await {
+                            Ok(session) => {
+                                browser.status_message = Some(format!(
+                                    "Dispatched #{} to Claude Code (session {})",
+                                    number,
+                                    &session.id[..8]
+                                ));
+                            }
+                            Err(e) => {
+                                browser.status_message = Some(format!("Failed to dispatch: {}", e));
+                            }
                         }
                     }
                 } else {
