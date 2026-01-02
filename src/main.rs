@@ -716,37 +716,19 @@ fn print_issue(issue: &IssueContent) {
     );
 }
 
-async fn handle_agents_command(args: &str, state: &AppState) {
+async fn handle_agents_command(args: &str, _state: &AppState) {
     let parts: Vec<&str> = args.split_whitespace().collect();
     let subcommand = parts.first().copied().unwrap_or("");
     let rest = parts.get(1..).unwrap_or(&[]).join(" ");
 
     match subcommand {
         "" => {
-            // Open the TUI agent list view
-            let Some(ref project) = state.current_project else {
-                print_colored_message("No project selected. Use /repository <name> first.\n", Color::DarkYellow);
-                return;
-            };
-
-            let Some(ref token) = state.cached_token else {
-                print_colored_message("Not authenticated. Use /login first.\n", Color::Red);
-                return;
-            };
-
-            let github = GitHubConfig::new(project.owner.clone(), project.repo.clone(), token.clone());
-            let github_token = state.cached_token.clone();
-
-            let auto_format = state
-                .config
-                .as_ref()
-                .map(|c| c.auto_format_comments)
-                .unwrap_or(false);
-
-            // Show agent list in TUI
-            if let Err(e) = tui::run_agent_browser(github, github_token, auto_format, &llm::default_endpoint()).await {
-                print_colored_message(&format!("TUI error: {}\n", e), Color::Red);
-            }
+            // Agent sessions are now integrated in the issues list
+            print_colored_message(
+                "Agent sessions are now shown directly in /issues (with ▶⏸✓✗ indicators).\n\
+                 Use /agents list for text-mode listing.\n",
+                Color::Cyan,
+            );
         }
 
         "list" => {

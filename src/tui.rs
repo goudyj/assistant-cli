@@ -35,10 +35,6 @@ pub enum TuiView {
         selected: usize,
     },
     ConfirmDispatch { issue: IssueDetail },
-    AgentList {
-        sessions: Vec<crate::agents::AgentSession>,
-        selected: usize,
-    },
     AgentLogs {
         session_id: String,
         content: String,
@@ -413,61 +409,6 @@ pub async fn run_issue_browser_with_pagination(
     Ok(())
 }
 
-/// Run the TUI application starting with the agent list view
-pub async fn run_agent_browser(
-    github: GitHubConfig,
-    github_token: Option<String>,
-    auto_format: bool,
-    llm_endpoint: &str,
-) -> io::Result<()> {
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    // Load sessions and start with AgentList view
-    let mut manager = crate::agents::SessionManager::load();
-    // Sync with actual tmux state
-    if manager.sync_with_tmux() {
-        let _ = manager.save();
-    }
-    let sessions_list: Vec<_> = manager.list().to_vec();
-
-    let mut browser = IssueBrowser::with_pagination(
-        Vec::new(),
-        github,
-        github_token,
-        auto_format,
-        llm_endpoint.to_string(),
-        Vec::new(),
-        crate::list::IssueState::Open,
-        false,
-    );
-
-    // Start at agent list view
-    browser.view = TuiView::AgentList {
-        sessions: sessions_list,
-        selected: 0,
-    };
-
-    while !browser.should_quit {
-        terminal.draw(|f| draw_ui(f, &mut browser))?;
-
-        if event::poll(std::time::Duration::from_millis(100))?
-            && let Event::Key(key) = event::read()?
-                && key.kind == KeyEventKind::Press {
-                    handle_key_event(&mut browser, key.code).await;
-                }
-    }
-
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-
-    Ok(())
-}
-
 fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
     let image_count = browser.current_images.len();
 
@@ -559,9 +500,6 @@ fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
                 chunks[1],
                 &format!("Dispatch #{} to Claude Code? (y/n)", issue.number),
             );
-        }
-        TuiView::AgentList { sessions, selected } => {
-            draw_agent_list(f, sessions, *selected);
         }
         TuiView::AgentLogs {
             session_id,
@@ -701,7 +639,7 @@ fn draw_list_view(f: &mut Frame, browser: &mut IssueBrowser) {
             parts.push(format!("[{} selected]", browser.selected_issues.len()));
         }
 
-        format!(" {} │ Space select │ d dispatch │ t tmux │ / search │ c clear │ q quit ", parts.join(" "))
+        format!(" {} │ d dispatch │ t tmux │ l logs │ D diff │ p PR │ K kill │ / search │ q quit ", parts.join(" "))
     };
 
     let list = List::new(items)
@@ -1183,83 +1121,6 @@ fn draw_assignee_picker(
     f.render_widget(list, chunks[2]);
 }
 
-fn draw_agent_list(f: &mut Frame, sessions: &[crate::agents::AgentSession], selected: usize) {
-    use crate::agents::AgentStatus;
-
-    let items: Vec<ListItem> = sessions
-        .iter()
-        .enumerate()
-        .map(|(i, session)| {
-            let status_icon = match &session.status {
-                AgentStatus::Running => "▶",
-                AgentStatus::Awaiting => "⏸",
-                AgentStatus::Completed { .. } => "✓",
-                AgentStatus::Failed { .. } => "✗",
-            };
-
-            let status_color = match &session.status {
-                AgentStatus::Running => Color::Yellow,
-                AgentStatus::Awaiting => Color::Cyan,
-                AgentStatus::Completed { .. } => Color::Green,
-                AgentStatus::Failed { .. } => Color::Red,
-            };
-
-            let pr_badge = if session.pr_url.is_some() {
-                " [PR]"
-            } else {
-                ""
-            };
-
-            let line = Line::from(vec![
-                Span::styled(
-                    format!(" {} ", status_icon),
-                    Style::default().fg(status_color),
-                ),
-                Span::styled(
-                    format!("#{:<5}", session.issue_number),
-                    Style::default().fg(Color::Cyan),
-                ),
-                Span::raw(&session.issue_title),
-                Span::styled(
-                    format!(
-                        "  +{} -{} {} files  {}{}",
-                        session.stats.lines_added,
-                        session.stats.lines_deleted,
-                        session.stats.files_changed,
-                        session.duration_str(),
-                        pr_badge
-                    ),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]);
-
-            let style = if i == selected {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-
-            ListItem::new(line).style(style)
-        })
-        .collect();
-
-    let title = format!(
-        " Agents ({}) │ t tmux │ Enter logs │ D diff │ p PR │ o open │ C clean │ K kill │ q back ",
-        sessions.len()
-    );
-
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(Style::default().fg(Color::Cyan)),
-    );
-
-    f.render_widget(list, f.area());
-}
-
 fn draw_agent_logs(f: &mut Frame, session_id: &str, content: &str, scroll: u16) {
     let lines: Vec<Line> = content
         .lines()
@@ -1456,18 +1317,6 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                 browser.clear_search();
                 browser.status_message = Some("Filter cleared".to_string());
             }
-            KeyCode::Char('A') => {
-                // Open agent list
-                let mut manager = crate::agents::SessionManager::load();
-                if manager.sync_with_tmux() {
-                    let _ = manager.save();
-                }
-                let sessions_list: Vec<_> = manager.list().to_vec();
-                browser.view = TuiView::AgentList {
-                    sessions: sessions_list,
-                    selected: 0,
-                };
-            }
             KeyCode::Char(' ') => {
                 // Toggle selection of current issue
                 if let Some(issue) = browser.selected_issue() {
@@ -1585,6 +1434,127 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                     }
                 } else {
                     browser.status_message = Some("No tmux sessions available".to_string());
+                }
+            }
+            KeyCode::Char('l') => {
+                // View logs for agent of current issue
+                if let Some(issue) = browser.selected_issue() {
+                    if let Some(session) = browser.session_cache.get(&issue.number) {
+                        let content = std::fs::read_to_string(&session.log_file).unwrap_or_default();
+                        browser.view = TuiView::AgentLogs {
+                            session_id: session.id.clone(),
+                            content,
+                            scroll: 0,
+                        };
+                    } else {
+                        browser.status_message = Some("No agent session for this issue".to_string());
+                    }
+                }
+            }
+            KeyCode::Char('D') => {
+                // View diff for agent of current issue
+                if let Some(issue) = browser.selected_issue() {
+                    if let Some(session) = browser.session_cache.get(&issue.number) {
+                        let output = std::process::Command::new("git")
+                            .current_dir(&session.worktree_path)
+                            .args(["diff", "HEAD"])
+                            .output();
+
+                        let content = match output {
+                            Ok(out) if out.status.success() => {
+                                String::from_utf8_lossy(&out.stdout).to_string()
+                            }
+                            _ => "No changes or failed to get diff".to_string(),
+                        };
+
+                        browser.view = TuiView::AgentDiff {
+                            session_id: session.id.clone(),
+                            content,
+                            scroll: 0,
+                        };
+                    } else {
+                        browser.status_message = Some("No agent session for this issue".to_string());
+                    }
+                }
+            }
+            KeyCode::Char('p') => {
+                // Create PR from agent of current issue
+                if let Some(issue) = browser.selected_issue() {
+                    let issue_number = issue.number;
+                    if let Some(session) = browser.session_cache.get(&issue_number) {
+                        if session.is_running() {
+                            browser.status_message = Some("Agent is still running".to_string());
+                        } else if session.pr_url.is_some() {
+                            browser.status_message = Some("PR already created".to_string());
+                        } else {
+                            match crate::agents::create_pr(session) {
+                                Ok(url) => {
+                                    browser.status_message = Some(format!("PR created: {}", url));
+                                }
+                                Err(e) => {
+                                    browser.status_message = Some(format!("Failed to create PR: {}", e));
+                                }
+                            }
+                        }
+                    } else {
+                        browser.status_message = Some("No agent session for this issue".to_string());
+                    }
+                    // Refresh session cache
+                    if let Some(project) = browser.project_name.clone() {
+                        browser.refresh_sessions(&project);
+                    }
+                }
+            }
+            KeyCode::Char('K') => {
+                // Kill agent of current issue
+                if let Some(issue) = browser.selected_issue() {
+                    let issue_number = issue.number;
+                    if let Some(session) = browser.session_cache.get(&issue_number) {
+                        if session.is_running() {
+                            let _ = crate::agents::kill_agent(&session.id);
+                            browser.status_message = Some(format!("Killed agent for #{}", issue_number));
+                        } else {
+                            browser.status_message = Some("Agent is not running".to_string());
+                        }
+                    } else {
+                        browser.status_message = Some("No agent session for this issue".to_string());
+                    }
+                    // Refresh session cache
+                    if let Some(project) = browser.project_name.clone() {
+                        browser.refresh_sessions(&project);
+                    }
+                }
+            }
+            KeyCode::Char('C') => {
+                // Cleanup worktree for agent of current issue
+                if let Some(issue) = browser.selected_issue() {
+                    let issue_number = issue.number;
+                    if let Some(session) = browser.session_cache.get(&issue_number).cloned() {
+                        if session.is_running() {
+                            browser.status_message = Some("Agent is still running".to_string());
+                        } else if let Some(parent) = session.worktree_path.parent()
+                            && let Some(grandparent) = parent.parent()
+                        {
+                            let _ = crate::agents::remove_worktree(
+                                grandparent,
+                                &session.worktree_path,
+                                true,
+                            );
+                            browser.status_message =
+                                Some(format!("Cleaned up worktree for #{}", issue_number));
+
+                            // Remove session from manager
+                            let mut manager = crate::agents::SessionManager::load();
+                            manager.remove(&session.id);
+                            let _ = manager.save();
+                        }
+                    } else {
+                        browser.status_message = Some("No agent session for this issue".to_string());
+                    }
+                    // Refresh session cache
+                    if let Some(project) = browser.project_name.clone() {
+                        browser.refresh_sessions(&project);
+                    }
                 }
             }
             _ => {}
@@ -1994,168 +1964,9 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
             }
             _ => {}
         },
-        TuiView::AgentList { sessions, selected } => match key {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                browser.view = TuiView::List;
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if *selected > 0 {
-                    *selected -= 1;
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if *selected < sessions.len().saturating_sub(1) {
-                    *selected += 1;
-                }
-            }
-            KeyCode::Enter => {
-                // View logs for selected session
-                if let Some(session) = sessions.get(*selected) {
-                    let content = std::fs::read_to_string(&session.log_file).unwrap_or_default();
-                    browser.view = TuiView::AgentLogs {
-                        session_id: session.id.clone(),
-                        content,
-                        scroll: 0,
-                    };
-                }
-            }
-            KeyCode::Char('K') => {
-                // Kill selected session
-                if let Some(session) = sessions.get(*selected)
-                    && session.is_running() {
-                        let _ = crate::agents::kill_agent(&session.id);
-                        browser.status_message = Some(format!("Killed agent {}", &session.id[..8]));
-                        // Refresh sessions
-                        let manager = crate::agents::SessionManager::load();
-                        let sessions_list: Vec<_> = manager.list().to_vec();
-                        browser.view = TuiView::AgentList {
-                            sessions: sessions_list,
-                            selected: 0,
-                        };
-                    }
-            }
-            KeyCode::Char('p') => {
-                // Create PR from selected session
-                if let Some(session) = sessions.get(*selected)
-                    && !session.is_running() && session.pr_url.is_none() {
-                        match crate::agents::create_pr(session) {
-                            Ok(url) => {
-                                browser.status_message = Some(format!("PR created: {}", url));
-                            }
-                            Err(e) => {
-                                browser.status_message = Some(format!("Failed to create PR: {}", e));
-                            }
-                        }
-                        // Refresh sessions
-                        let manager = crate::agents::SessionManager::load();
-                        let sessions_list: Vec<_> = manager.list().to_vec();
-                        browser.view = TuiView::AgentList {
-                            sessions: sessions_list,
-                            selected: *selected,
-                        };
-                    }
-            }
-            KeyCode::Char('o') => {
-                // Open worktree in finder/explorer
-                if let Some(session) = sessions.get(*selected) {
-                    let _ = open::that(&session.worktree_path);
-                }
-            }
-            KeyCode::Char('D') => {
-                // View diff for selected session
-                if let Some(session) = sessions.get(*selected) {
-                    let output = std::process::Command::new("git")
-                        .current_dir(&session.worktree_path)
-                        .args(["diff", "HEAD"])
-                        .output();
-
-                    let content = match output {
-                        Ok(out) if out.status.success() => {
-                            String::from_utf8_lossy(&out.stdout).to_string()
-                        }
-                        _ => "No changes or failed to get diff".to_string(),
-                    };
-
-                    browser.view = TuiView::AgentDiff {
-                        session_id: session.id.clone(),
-                        content,
-                        scroll: 0,
-                    };
-                }
-            }
-            KeyCode::Char('C') => {
-                // Cleanup worktree for selected session
-                if let Some(session) = sessions.get(*selected)
-                    && !session.is_running() {
-                        // Get the main repo path by going up from worktree
-                        if let Some(parent) = session.worktree_path.parent()
-                            && let Some(grandparent) = parent.parent() {
-                                // Remove worktree and branch
-                                let _ = crate::agents::remove_worktree(
-                                    grandparent,
-                                    &session.worktree_path,
-                                    true,
-                                );
-                                browser.status_message =
-                                    Some(format!("Cleaned up worktree for {}", &session.id[..8]));
-
-                                // Remove session from manager
-                                let mut manager = crate::agents::SessionManager::load();
-                                manager.remove(&session.id);
-                                let _ = manager.save();
-
-                                // Refresh sessions
-                                let sessions_list: Vec<_> = manager.list().to_vec();
-                                let new_selected = if *selected >= sessions_list.len() {
-                                    sessions_list.len().saturating_sub(1)
-                                } else {
-                                    *selected
-                                };
-                                browser.view = TuiView::AgentList {
-                                    sessions: sessions_list,
-                                    selected: new_selected,
-                                };
-                            }
-                    }
-            }
-            KeyCode::Char('t') => {
-                // Open embedded tmux for selected session
-                if let Some(session) = sessions.get(*selected)
-                    && session.is_running() {
-                        let tmux_name = crate::agents::tmux_session_name(&session.project, session.issue_number);
-                        let all_sessions = crate::agents::list_tmux_sessions();
-                        let current_idx = all_sessions.iter().position(|s| s == &tmux_name).unwrap_or(0);
-
-                        let area = crossterm::terminal::size().unwrap_or((80, 24));
-                        match crate::embedded_term::EmbeddedTerminal::new(
-                            &tmux_name,
-                            area.1.saturating_sub(1),
-                            area.0,
-                        ) {
-                            Ok(term) => {
-                                browser.embedded_term = Some(term);
-                                browser.view = TuiView::EmbeddedTmux {
-                                    available_sessions: all_sessions,
-                                    current_index: current_idx,
-                                };
-                            }
-                            Err(e) => {
-                                browser.status_message = Some(format!("Failed to open terminal: {}", e));
-                            }
-                        }
-                    }
-            }
-            _ => {}
-        },
         TuiView::AgentLogs { scroll, .. } => match key {
             KeyCode::Esc | KeyCode::Char('q') => {
-                // Go back to agent list
-                let manager = crate::agents::SessionManager::load();
-                let sessions_list: Vec<_> = manager.list().to_vec();
-                browser.view = TuiView::AgentList {
-                    sessions: sessions_list,
-                    selected: 0,
-                };
+                browser.view = TuiView::List;
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 *scroll = scroll.saturating_sub(1);
@@ -2173,13 +1984,7 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
         },
         TuiView::AgentDiff { scroll, .. } => match key {
             KeyCode::Esc | KeyCode::Char('q') => {
-                // Go back to agent list
-                let manager = crate::agents::SessionManager::load();
-                let sessions_list: Vec<_> = manager.list().to_vec();
-                browser.view = TuiView::AgentList {
-                    sessions: sessions_list,
-                    selected: 0,
-                };
+                browser.view = TuiView::List;
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 *scroll = scroll.saturating_sub(1);
