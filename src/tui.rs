@@ -2022,6 +2022,10 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                     // Exit embedded terminal and go back to list
                     browser.embedded_term = None;
                     browser.view = TuiView::List;
+                    // Refresh session cache to show updated agent status
+                    if let Some(project) = browser.project_name.clone() {
+                        browser.refresh_sessions(&project);
+                    }
                 }
                 KeyCode::Left => {
                     // Switch to previous session
