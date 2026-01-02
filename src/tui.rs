@@ -157,7 +157,11 @@ impl IssueBrowser {
 
     /// Refresh session cache for the current project
     pub fn refresh_sessions(&mut self, project: &str) {
-        let manager = crate::agents::SessionManager::load();
+        let mut manager = crate::agents::SessionManager::load();
+        // Sync with actual tmux state before displaying
+        if manager.sync_with_tmux() {
+            let _ = manager.save();
+        }
         self.session_cache.clear();
         for session in manager.list() {
             if session.project == project {
@@ -414,7 +418,11 @@ pub async fn run_agent_browser(
     let mut terminal = Terminal::new(backend)?;
 
     // Load sessions and start with AgentList view
-    let manager = crate::agents::SessionManager::load();
+    let mut manager = crate::agents::SessionManager::load();
+    // Sync with actual tmux state
+    if manager.sync_with_tmux() {
+        let _ = manager.save();
+    }
     let sessions_list: Vec<_> = manager.list().to_vec();
 
     let mut browser = IssueBrowser::with_pagination(
@@ -1362,7 +1370,10 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
             }
             KeyCode::Char('A') => {
                 // Open agent list
-                let manager = crate::agents::SessionManager::load();
+                let mut manager = crate::agents::SessionManager::load();
+                if manager.sync_with_tmux() {
+                    let _ = manager.save();
+                }
                 let sessions_list: Vec<_> = manager.list().to_vec();
                 browser.view = TuiView::AgentList {
                     sessions: sessions_list,

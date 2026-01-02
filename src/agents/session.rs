@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 use super::{cache_dir, sessions_file};
 
@@ -86,9 +87,14 @@ impl AgentSession {
         }
     }
 
-    /// Check if the session is still running
+    /// Check if the session is still running (based on stored status only)
     pub fn is_running(&self) -> bool {
         matches!(self.status, AgentStatus::Running)
+    }
+
+    /// Get the tmux session name for this session
+    pub fn tmux_session_name(&self) -> String {
+        format!("{}-issue-{}", self.project, self.issue_number)
     }
 
     /// Get duration since start
@@ -128,6 +134,28 @@ impl SessionManager {
             Vec::new()
         };
         Self { sessions }
+    }
+
+    /// Sync session statuses with actual tmux state.
+    /// Marks sessions as completed if their tmux session no longer exists.
+    pub fn sync_with_tmux(&mut self) -> bool {
+        let mut changed = false;
+        for session in &mut self.sessions {
+            if session.is_running() {
+                let tmux_name = session.tmux_session_name();
+                let tmux_exists = Command::new("tmux")
+                    .args(["has-session", "-t", &tmux_name])
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+
+                if !tmux_exists {
+                    session.status = AgentStatus::Completed { exit_code: 0 };
+                    changed = true;
+                }
+            }
+        }
+        changed
     }
 
     /// Save sessions to file
