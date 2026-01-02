@@ -49,6 +49,12 @@ pub enum TuiView {
         content: String,
         scroll: u16,
     },
+    EmbeddedTmux {
+        /// Available tmux sessions for switching
+        available_sessions: Vec<String>,
+        /// Current session index
+        current_index: usize,
+    },
 }
 
 /// Main TUI state
@@ -82,6 +88,8 @@ pub struct IssueBrowser {
     pub selected_issues: std::collections::HashSet<u64>,
     // Session cache for dispatch status display
     pub session_cache: std::collections::HashMap<u64, crate::agents::AgentSession>,
+    // Embedded terminal for tmux sessions
+    pub embedded_term: Option<crate::embedded_term::EmbeddedTerminal>,
 }
 
 impl IssueBrowser {
@@ -144,6 +152,7 @@ impl IssueBrowser {
             local_path: None,
             selected_issues: std::collections::HashSet::new(),
             session_cache: std::collections::HashMap::new(),
+            embedded_term: None,
         }
     }
 
@@ -567,6 +576,12 @@ fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
             scroll,
         } => {
             draw_agent_diff(f, session_id, content, *scroll);
+        }
+        TuiView::EmbeddedTmux {
+            available_sessions,
+            current_index,
+        } => {
+            draw_embedded_tmux(f, browser, available_sessions, *current_index);
         }
     }
 }
@@ -1302,6 +1317,75 @@ fn draw_agent_diff(f: &mut Frame, session_id: &str, content: &str, scroll: u16) 
     f.render_widget(paragraph, f.area());
 }
 
+fn draw_embedded_tmux(
+    f: &mut Frame,
+    browser: &IssueBrowser,
+    available_sessions: &[String],
+    current_index: usize,
+) {
+    let area = f.area();
+
+    // Header showing session info and controls
+    let header_text = if available_sessions.is_empty() {
+        " No tmux session │ ESC to exit ".to_string()
+    } else {
+        let session_name = &available_sessions[current_index];
+        format!(
+            " {} │ ←→ switch ({}/{}) │ ESC exit ",
+            session_name,
+            current_index + 1,
+            available_sessions.len()
+        )
+    };
+
+    // Split: header at top, terminal content below
+    let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+
+    // Draw header
+    let header = Paragraph::new(header_text)
+        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    f.render_widget(header, chunks[0]);
+
+    // Draw terminal content
+    if let Some(ref term) = browser.embedded_term {
+        let screen = term.get_screen();
+        let mut lines: Vec<Line> = Vec::new();
+
+        for row in screen {
+            let mut spans: Vec<Span> = Vec::new();
+            for cell in row {
+                let mut style = Style::default().fg(cell.fg).bg(cell.bg);
+                if cell.bold {
+                    style = style.add_modifier(Modifier::BOLD);
+                }
+                if cell.underline {
+                    style = style.add_modifier(Modifier::UNDERLINED);
+                }
+                if cell.inverse {
+                    style = style.add_modifier(Modifier::REVERSED);
+                }
+                let content = if cell.content.is_empty() {
+                    " ".to_string()
+                } else {
+                    cell.content
+                };
+                spans.push(Span::styled(content, style));
+            }
+            lines.push(Line::from(spans));
+        }
+
+        let text = Text::from(lines);
+        let paragraph = Paragraph::new(text);
+        f.render_widget(paragraph, chunks[1]);
+    } else {
+        // No terminal - show placeholder
+        let placeholder = Paragraph::new("Starting terminal...")
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(ratatui::layout::Alignment::Center);
+        f.render_widget(placeholder, chunks[1]);
+    }
+}
+
 fn format_date(date_str: &str) -> String {
     // Simple date formatting: take first 10 chars if available
     if date_str.len() >= 10 {
@@ -1312,6 +1396,7 @@ fn format_date(date_str: &str) -> String {
 }
 
 /// Attach to a tmux session, temporarily exiting the TUI
+#[allow(dead_code)]
 fn attach_to_tmux_session(session_name: &str) -> io::Result<()> {
     // Exit raw mode and alternate screen
     disable_raw_mode()?;
@@ -1421,23 +1506,65 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                 }
             }
             KeyCode::Char('t') => {
-                // Attach to tmux session for current issue
+                // Open embedded tmux view for current issue
                 if let Some(issue) = browser.selected_issue() {
                     let issue_number = issue.number;
                     if let Some(project) = browser.project_name.clone() {
                         let tmux_name = crate::agents::tmux_session_name(&project, issue_number);
                         if crate::agents::is_tmux_session_running(&tmux_name) {
-                            if let Err(e) = attach_to_tmux_session(&tmux_name) {
-                                browser.status_message = Some(format!("Failed to attach: {}", e));
+                            // Get all running tmux sessions for this project
+                            let all_sessions = crate::agents::list_tmux_sessions();
+                            let current_idx = all_sessions.iter().position(|s| s == &tmux_name).unwrap_or(0);
+
+                            // Create embedded terminal
+                            let area = crossterm::terminal::size().unwrap_or((80, 24));
+                            match crate::embedded_term::EmbeddedTerminal::new(
+                                &tmux_name,
+                                area.1.saturating_sub(1),
+                                area.0,
+                            ) {
+                                Ok(term) => {
+                                    browser.embedded_term = Some(term);
+                                    browser.view = TuiView::EmbeddedTmux {
+                                        available_sessions: all_sessions,
+                                        current_index: current_idx,
+                                    };
+                                }
+                                Err(e) => {
+                                    browser.status_message = Some(format!("Failed to open terminal: {}", e));
+                                }
                             }
-                            // Refresh sessions after returning from tmux
-                            browser.refresh_sessions(&project);
                         } else {
                             browser.status_message = Some("No active session for this issue".to_string());
                         }
                     } else {
                         browser.status_message = Some("No project selected".to_string());
                     }
+                }
+            }
+            KeyCode::Char('T') => {
+                // Open embedded tmux with all sessions (capital T)
+                let all_sessions = crate::agents::list_tmux_sessions();
+                if !all_sessions.is_empty() {
+                    let area = crossterm::terminal::size().unwrap_or((80, 24));
+                    match crate::embedded_term::EmbeddedTerminal::new(
+                        &all_sessions[0],
+                        area.1.saturating_sub(1),
+                        area.0,
+                    ) {
+                        Ok(term) => {
+                            browser.embedded_term = Some(term);
+                            browser.view = TuiView::EmbeddedTmux {
+                                available_sessions: all_sessions,
+                                current_index: 0,
+                            };
+                        }
+                        Err(e) => {
+                            browser.status_message = Some(format!("Failed to open terminal: {}", e));
+                        }
+                    }
+                } else {
+                    browser.status_message = Some("No tmux sessions available".to_string());
                 }
             }
             _ => {}
@@ -1972,20 +2099,30 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                     }
             }
             KeyCode::Char('t') => {
-                // Attach to tmux session
+                // Open embedded tmux for selected session
                 if let Some(session) = sessions.get(*selected)
                     && session.is_running() {
                         let tmux_name = crate::agents::tmux_session_name(&session.project, session.issue_number);
-                        if let Err(e) = attach_to_tmux_session(&tmux_name) {
-                            browser.status_message = Some(format!("Failed to attach: {}", e));
+                        let all_sessions = crate::agents::list_tmux_sessions();
+                        let current_idx = all_sessions.iter().position(|s| s == &tmux_name).unwrap_or(0);
+
+                        let area = crossterm::terminal::size().unwrap_or((80, 24));
+                        match crate::embedded_term::EmbeddedTerminal::new(
+                            &tmux_name,
+                            area.1.saturating_sub(1),
+                            area.0,
+                        ) {
+                            Ok(term) => {
+                                browser.embedded_term = Some(term);
+                                browser.view = TuiView::EmbeddedTmux {
+                                    available_sessions: all_sessions,
+                                    current_index: current_idx,
+                                };
+                            }
+                            Err(e) => {
+                                browser.status_message = Some(format!("Failed to open terminal: {}", e));
+                            }
                         }
-                        // Refresh sessions after returning from tmux
-                        let manager = crate::agents::SessionManager::load();
-                        let sessions_list: Vec<_> = manager.list().to_vec();
-                        browser.view = TuiView::AgentList {
-                            sessions: sessions_list,
-                            selected: *selected,
-                        };
                     }
             }
             _ => {}
@@ -2038,6 +2175,58 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
             }
             _ => {}
         },
+        TuiView::EmbeddedTmux {
+            available_sessions,
+            current_index,
+        } => {
+            match key {
+                KeyCode::Esc => {
+                    // Exit embedded terminal and go back to list
+                    browser.embedded_term = None;
+                    browser.view = TuiView::List;
+                }
+                KeyCode::Left => {
+                    // Switch to previous session
+                    if !available_sessions.is_empty() && *current_index > 0 {
+                        *current_index -= 1;
+                        let session_name = &available_sessions[*current_index];
+                        // Create new embedded terminal for this session
+                        let area = crossterm::terminal::size().unwrap_or((80, 24));
+                        if let Ok(term) = crate::embedded_term::EmbeddedTerminal::new(
+                            session_name,
+                            area.1.saturating_sub(1), // -1 for header
+                            area.0,
+                        ) {
+                            browser.embedded_term = Some(term);
+                        }
+                    }
+                }
+                KeyCode::Right => {
+                    // Switch to next session
+                    if !available_sessions.is_empty()
+                        && *current_index < available_sessions.len() - 1
+                    {
+                        *current_index += 1;
+                        let session_name = &available_sessions[*current_index];
+                        // Create new embedded terminal for this session
+                        let area = crossterm::terminal::size().unwrap_or((80, 24));
+                        if let Ok(term) = crate::embedded_term::EmbeddedTerminal::new(
+                            session_name,
+                            area.1.saturating_sub(1),
+                            area.0,
+                        ) {
+                            browser.embedded_term = Some(term);
+                        }
+                    }
+                }
+                _ => {
+                    // Forward all other keys to the embedded terminal
+                    if let Some(ref term) = browser.embedded_term {
+                        term.send_key(key);
+                    }
+                }
+            }
+        }
     }
 }
 

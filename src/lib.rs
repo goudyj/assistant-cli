@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod auth;
 pub mod config;
+pub mod embedded_term;
 pub mod github;
 pub mod issues;
 pub mod list;
