@@ -297,6 +297,8 @@ fn start_tmux_monitoring(
                     let mut manager = SessionManager::load();
                     manager.update_status(&session_id, AgentStatus::Running);
                     let _ = manager.save();
+                    // Reset notification flag so we can notify again when idle
+                    idle_notified = false;
                 }
 
                 was_idle = is_idle;

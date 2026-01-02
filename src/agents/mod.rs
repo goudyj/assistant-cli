@@ -75,18 +75,19 @@ pub fn new_session_id() -> String {
     Uuid::new_v4().to_string()
 }
 
-/// Send a macOS notification
+/// Send a macOS notification with sound
 #[cfg(target_os = "macos")]
 pub fn send_notification(title: &str, message: &str) {
     use std::process::Command;
     let script = format!(
-        "display notification \"{}\" with title \"{}\"",
-        message.replace('"', "\\\""),
+        "display notification \"{}\" with title \"{}\" sound name \"Glass\"",
+        message.replace('"', "\\\"").replace('\n', " "),
         title.replace('"', "\\\"")
     );
+    // Use output() instead of spawn() to ensure the command completes
     let _ = Command::new("osascript")
         .args(["-e", &script])
-        .spawn();
+        .output();
 }
 
 #[cfg(not(target_os = "macos"))]
