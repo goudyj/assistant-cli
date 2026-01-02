@@ -1480,17 +1480,37 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                 }
             }
             KeyCode::Char('d') => {
-                // Dispatch selected issues to Claude Code
-                if browser.selected_issues.is_empty() {
-                    browser.status_message = Some("No issues selected. Press Space to select.".to_string());
-                } else if browser.local_path.is_none() {
+                // Dispatch to Claude Code
+                if browser.local_path.is_none() {
                     browser.status_message = Some("No local_path configured for this project.".to_string());
+                } else if browser.selected_issues.is_empty() {
+                    // No selection: dispatch currently highlighted issue
+                    if let Some(issue) = browser.selected_issue() {
+                        let issue_number = issue.number;
+                        let project_name = browser.project_name.clone().unwrap_or_default();
+                        let local_path = browser.local_path.clone().unwrap();
+
+                        if let Ok(detail) = browser.github.get_issue(issue_number).await {
+                            match crate::agents::dispatch_to_claude(&detail, &local_path, &project_name).await {
+                                Ok(_) => {
+                                    browser.status_message = Some(format!("Dispatched #{} to Claude Code.", issue_number));
+                                }
+                                Err(e) => {
+                                    browser.status_message = Some(format!("Failed to dispatch: {}", e));
+                                }
+                            }
+                        }
+                        // Refresh session cache
+                        if let Some(project) = browser.project_name.clone() {
+                            browser.refresh_sessions(&project);
+                        }
+                    }
                 } else {
+                    // Dispatch all selected issues
                     let count = browser.selected_issues.len();
                     let project_name = browser.project_name.clone().unwrap_or_default();
                     let local_path = browser.local_path.clone().unwrap();
 
-                    // Dispatch each selected issue
                     for issue_number in browser.selected_issues.iter() {
                         if let Ok(detail) = browser.github.get_issue(*issue_number).await {
                             let _ = crate::agents::dispatch_to_claude(&detail, &local_path, &project_name).await;
