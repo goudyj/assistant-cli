@@ -199,12 +199,18 @@ fn is_claude_idle(pane_content: &str) -> bool {
         .copied()
         .collect();
 
-    // Claude Code shows ">" prompt when waiting for input
     for line in &last_lines {
         // Trim only leading whitespace to preserve trailing context
         let trimmed = line.trim_start();
-        // Check for prompt patterns: line is just ">" possibly with trailing space/cursor
+
+        // Claude Code shows ">" prompt when waiting for input
         if trimmed == ">" || trimmed.starts_with("> ") {
+            return true;
+        }
+
+        // Claude Code shows selection dialog when asking a question
+        // Pattern: "Enter to select · Tab/Arrow keys to navigate · Esc to cancel"
+        if trimmed.contains("Enter to select") {
             return true;
         }
     }
@@ -469,5 +475,12 @@ mod tests {
         // Prompt character in middle of text should still trigger
         // because we check last non-empty lines
         assert!(is_claude_idle("Some > text\n>\n"));
+    }
+
+    #[test]
+    fn idle_detection_question_dialog() {
+        // Claude Code selection dialog
+        let content = "Quel type de fichier?\n1. JSON\n2. YAML\nEnter to select · Tab/Arrow keys to navigate · Esc to cancel\n";
+        assert!(is_claude_idle(content));
     }
 }
