@@ -251,6 +251,8 @@ async fn main() {
                 has_next_page,
                 Some(project_name.clone()),
                 project.local_path.clone(),
+                project.labels.clone(),
+                commands,
             ).await {
                 eprintln!("TUI error: {}", e);
             }
@@ -688,6 +690,8 @@ async fn handle_list_with_options(args: &str, state: &AppState) {
                     has_next_page,
                     state.current_project_name.clone(),
                     project.local_path.clone(),
+                    project.labels.clone(),
+                    Vec::new(), // Legacy: no commands
                 ).await
             {
                 print_colored_message(&format!("TUI error: {}\n", e), Color::Red);
@@ -761,6 +765,8 @@ async fn handle_list_command(labels: Vec<String>, state: &AppState) {
                     false,
                     state.current_project_name.clone(),
                     project.local_path.clone(),
+                    project.labels.clone(),
+                    Vec::new(), // Legacy: no commands
                 ).await
             {
                 print_colored_message(&format!("TUI error: {}\n", e), Color::Red);

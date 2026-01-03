@@ -466,6 +466,8 @@ pub async fn run_issue_browser(
         false,
         None,
         None,
+        Vec::new(),
+        Vec::new(),
     )
     .await
 }
@@ -483,6 +485,8 @@ pub async fn run_issue_browser_with_pagination(
     has_next_page: bool,
     project_name: Option<String>,
     local_path: Option<std::path::PathBuf>,
+    project_labels: Vec<String>,
+    available_commands: Vec<CommandSuggestion>,
 ) -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -506,6 +510,10 @@ pub async fn run_issue_browser_with_pagination(
     if let (Some(name), Some(path)) = (project_name, local_path) {
         browser.set_project_info(name, path);
     }
+
+    // Set labels and commands for issue creation and command palette
+    browser.set_project_labels(project_labels);
+    browser.set_available_commands(available_commands);
 
     // Resume monitoring threads for any running sessions from previous process
     crate::agents::resume_monitoring_for_running_sessions();
