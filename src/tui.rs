@@ -3,7 +3,7 @@ use crate::github::{GitHubConfig, IssueDetail, IssueSummary};
 use crate::issues::IssueContent;
 use crate::llm;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -75,6 +75,12 @@ pub enum TuiView {
         messages: Vec<llm::Message>,
         feedback_input: String,
         scroll: u16,
+    },
+    /// Direct issue creation (no AI)
+    DirectIssue {
+        title: String,
+        body: String,
+        editing_body: bool,
     },
 }
 
@@ -335,6 +341,34 @@ impl IssueBrowser {
         self.is_loading = false;
     }
 
+    /// Reload issues from scratch (page 1)
+    pub async fn reload_issues(&mut self) {
+        self.is_loading = true;
+
+        match self
+            .github
+            .list_issues_paginated(&self.list_labels, &self.list_state_filter, 20, 1)
+            .await
+        {
+            Ok((new_issues, has_next)) => {
+                self.all_issues = new_issues.clone();
+                self.issues = new_issues;
+                self.current_page = 1;
+                self.has_next_page = has_next;
+                self.search_query = None;
+
+                // Reset selection to first item
+                if !self.issues.is_empty() {
+                    self.list_state.select(Some(0));
+                }
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Failed to reload: {}", e));
+            }
+        }
+        self.is_loading = false;
+    }
+
     /// Filter issues based on search query
     pub fn apply_search_filter(&mut self, query: &str) {
         if query.is_empty() {
@@ -491,7 +525,8 @@ pub async fn run_issue_browser_with_pagination(
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     // No mouse capture to allow text selection / copy-paste
-    execute!(stdout, EnterAlternateScreen)?;
+    // Enable bracketed paste for handling pasted text
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -531,15 +566,30 @@ pub async fn run_issue_browser_with_pagination(
 
         terminal.draw(|f| draw_ui(f, &mut browser))?;
 
-        if event::poll(std::time::Duration::from_millis(100))?
-            && let Event::Key(key) = event::read()?
-                && key.kind == KeyEventKind::Press {
-                    handle_key_event(&mut browser, key.code).await;
+        if event::poll(std::time::Duration::from_millis(100))? {
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    // Handle Ctrl+V for paste from clipboard (if available)
+                    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('v') {
+                        // Try to paste from clipboard
+                        if let Ok(content) = get_clipboard_content() {
+                            handle_paste(&mut browser, &content);
+                        }
+                    } else {
+                        handle_key_event(&mut browser, key.code).await;
+                    }
                 }
+                Event::Paste(content) => {
+                    // Handle bracketed paste
+                    handle_paste(&mut browser, &content);
+                }
+                _ => {}
+            }
+        }
     }
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), DisableBracketedPaste, LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     Ok(())
@@ -684,6 +734,13 @@ fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
             let feedback_clone = feedback_input.clone();
             draw_preview_issue(f, &issue_clone, &feedback_clone, *scroll);
         }
+        TuiView::DirectIssue {
+            title,
+            body,
+            editing_body,
+        } => {
+            draw_direct_issue(f, title, body, *editing_body);
+        }
     }
 }
 
@@ -802,7 +859,7 @@ fn draw_list_view(f: &mut Frame, browser: &mut IssueBrowser) {
             parts.push(format!("[{} selected]", browser.selected_issues.len()));
         }
 
-        format!(" {} │ C create │ d dispatch │ t tmux │ s search │ / cmd │ q quit ", parts.join(" "))
+        format!(" {} │ C ai │ N new │ R refresh │ d dispatch │ t tmux │ s search │ / cmd │ q quit ", parts.join(" "))
     };
 
     let list = List::new(items)
@@ -1689,6 +1746,99 @@ fn draw_preview_issue(f: &mut Frame, issue: &IssueContent, feedback_input: &str,
     f.render_widget(feedback_para, chunks[1]);
 }
 
+/// Draw direct issue creation screen (no AI)
+fn draw_direct_issue(f: &mut Frame, title: &str, body: &str, editing_body: bool) {
+    let area = f.area();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" New Issue (direct) ")
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    // Split: title field, body field, help
+    let chunks = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(5),
+        Constraint::Length(2),
+    ])
+    .split(inner);
+
+    // Title field
+    let title_style = if !editing_body {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let title_block = Block::default()
+        .borders(Borders::ALL)
+        .title(if !editing_body { " Title (editing) " } else { " Title " })
+        .border_style(title_style);
+    let title_text = if title.is_empty() && !editing_body {
+        "Enter issue title...".to_string()
+    } else if title.is_empty() {
+        String::new()
+    } else {
+        title.to_string()
+    };
+    let title_para = Paragraph::new(if !editing_body {
+        format!("{}_", title_text)
+    } else {
+        title_text
+    })
+    .block(title_block)
+    .style(if title.is_empty() && !editing_body {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    });
+    f.render_widget(title_para, chunks[0]);
+
+    // Body field
+    let body_style = if editing_body {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let body_block = Block::default()
+        .borders(Borders::ALL)
+        .title(if editing_body { " Body (editing) " } else { " Body " })
+        .border_style(body_style);
+    let body_text = if body.is_empty() && editing_body {
+        "Enter issue body (markdown supported)...".to_string()
+    } else if body.is_empty() {
+        String::new()
+    } else {
+        body.to_string()
+    };
+    let body_para = Paragraph::new(if editing_body {
+        format!("{}_", body_text)
+    } else {
+        body_text
+    })
+    .block(body_block)
+    .style(if body.is_empty() && editing_body {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    })
+    .wrap(Wrap { trim: false });
+    f.render_widget(body_para, chunks[1]);
+
+    // Help
+    let help_text = if editing_body {
+        "Tab: back to title │ Enter: create issue │ Esc: cancel"
+    } else {
+        "Tab: edit body │ Enter: create issue │ Esc: cancel"
+    };
+    let help = Paragraph::new(help_text)
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    f.render_widget(help, chunks[2]);
+}
+
 fn format_date(date_str: &str) -> String {
     // Simple date formatting: take first 10 chars if available
     if date_str.len() >= 10 {
@@ -2039,7 +2189,7 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                 }
             }
             KeyCode::Char('C') => {
-                // Create new issue
+                // Create new issue with AI
                 if browser.project_labels.is_empty() {
                     browser.status_message = Some("No project labels configured.".to_string());
                 } else {
@@ -2048,6 +2198,20 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                         stage: CreateStage::Description,
                     };
                 }
+            }
+            KeyCode::Char('N') => {
+                // Create new issue directly (no AI)
+                browser.view = TuiView::DirectIssue {
+                    title: String::new(),
+                    body: String::new(),
+                    editing_body: false,
+                };
+            }
+            KeyCode::Char('R') => {
+                // Refresh issue list
+                browser.status_message = Some("Refreshing...".to_string());
+                browser.reload_issues().await;
+                browser.status_message = Some("Refreshed".to_string());
             }
             _ => {}
         },
@@ -2746,6 +2910,8 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                         Ok(url) => {
                             browser.status_message = Some(format!("Issue created: {}", url));
                             browser.view = TuiView::List;
+                            // Refresh issue list
+                            browser.reload_issues().await;
                         }
                         Err(e) => {
                             browser.status_message = Some(format!("Failed to create: {}", e));
@@ -2793,7 +2959,145 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
             }
             _ => {}
         },
+        TuiView::DirectIssue {
+            title,
+            body,
+            editing_body,
+        } => match key {
+            KeyCode::Esc => {
+                browser.view = TuiView::List;
+            }
+            KeyCode::Tab => {
+                // Toggle between title and body editing
+                *editing_body = !*editing_body;
+            }
+            KeyCode::Enter => {
+                // Create issue if title is not empty
+                if title.is_empty() {
+                    browser.status_message = Some("Title cannot be empty".to_string());
+                } else {
+                    let issue = IssueContent {
+                        type_: "task".to_string(),
+                        title: title.clone(),
+                        body: body.clone(),
+                        labels: Vec::new(),
+                    };
+                    match browser.github.create_issue(&issue).await {
+                        Ok(url) => {
+                            browser.status_message = Some(format!("Issue created: {}", url));
+                            browser.view = TuiView::List;
+                            browser.reload_issues().await;
+                        }
+                        Err(e) => {
+                            browser.status_message = Some(format!("Failed to create: {}", e));
+                        }
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                if *editing_body {
+                    body.pop();
+                } else {
+                    title.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if *editing_body {
+                    body.push(c);
+                } else {
+                    title.push(c);
+                }
+            }
+            _ => {}
+        },
     }
+}
+
+/// Handle pasted content into input fields
+fn handle_paste(browser: &mut IssueBrowser, content: &str) {
+    // Remove newlines for single-line fields, keep them for body fields
+    let clean_content = content.replace('\r', "");
+
+    match &mut browser.view {
+        TuiView::Search { input } => {
+            input.push_str(&clean_content.replace('\n', " "));
+        }
+        TuiView::Command { input, suggestions, selected } => {
+            input.push_str(&clean_content.replace('\n', " "));
+            // Update suggestions
+            let input_clone = input.clone();
+            let available = browser.available_commands.clone();
+            *suggestions = if input_clone.is_empty() {
+                available
+            } else {
+                let input_lower = input_clone.to_lowercase();
+                available
+                    .into_iter()
+                    .filter(|cmd| cmd.name.to_lowercase().contains(&input_lower))
+                    .collect()
+            };
+            *selected = 0;
+        }
+        TuiView::CreateIssue { input, stage } => {
+            if matches!(stage, CreateStage::Description) {
+                input.push_str(&clean_content);
+            }
+        }
+        TuiView::PreviewIssue { feedback_input, .. } => {
+            feedback_input.push_str(&clean_content);
+        }
+        TuiView::DirectIssue { title, body, editing_body } => {
+            if *editing_body {
+                body.push_str(&clean_content);
+            } else {
+                title.push_str(&clean_content.replace('\n', " "));
+            }
+        }
+        TuiView::AddComment { input, .. } => {
+            input.push_str(&clean_content);
+        }
+        TuiView::AssignUser { input, .. } => {
+            input.push_str(&clean_content.replace('\n', " "));
+        }
+        _ => {}
+    }
+}
+
+/// Try to get clipboard content (platform-specific)
+fn get_clipboard_content() -> Result<String, Box<dyn std::error::Error>> {
+    // Try using pbpaste on macOS
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("pbpaste")
+            .output()?;
+        if output.status.success() {
+            return Ok(String::from_utf8(output.stdout)?);
+        }
+    }
+
+    // Try using xclip on Linux
+    #[cfg(target_os = "linux")]
+    {
+        let output = std::process::Command::new("xclip")
+            .args(["-selection", "clipboard", "-o"])
+            .output();
+        if let Ok(out) = output {
+            if out.status.success() {
+                return Ok(String::from_utf8(out.stdout)?);
+            }
+        }
+        // Fallback to xsel
+        let output = std::process::Command::new("xsel")
+            .args(["--clipboard", "--output"])
+            .output();
+        if let Ok(out) = output {
+            if out.status.success() {
+                return Ok(String::from_utf8(out.stdout)?);
+            }
+        }
+    }
+
+    Err("Clipboard not available".into())
 }
 
 async fn format_comment_with_llm(
