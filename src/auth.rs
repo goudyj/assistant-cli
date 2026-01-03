@@ -50,8 +50,8 @@ struct AccessTokenResponse {
 pub struct DeviceFlowAuth {
     pub user_code: String,
     pub verification_uri: String,
-    device_code: String,
-    client_id: String,
+    pub device_code: String,
+    pub client_id: String,
     interval: u64,
     expires_in: u64,
 }

@@ -2,7 +2,7 @@ use crate::llm;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct IssueContent {
     pub type_: String,
     pub title: String,

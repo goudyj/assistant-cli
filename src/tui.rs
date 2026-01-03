@@ -1,4 +1,6 @@
+use crate::auth::{self, DeviceFlowAuth};
 use crate::github::{GitHubConfig, IssueDetail, IssueSummary};
+use crate::issues::IssueContent;
 use crate::llm;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
@@ -10,7 +12,7 @@ use fuzzy_matcher::FuzzyMatcher;
 use image::ImageReader;
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Layout, Rect},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
@@ -51,6 +53,46 @@ pub enum TuiView {
         /// Current session index
         current_index: usize,
     },
+    /// Project selection screen
+    ProjectSelect {
+        projects: Vec<String>,
+        selected: usize,
+    },
+    /// Command palette for custom commands
+    Command {
+        input: String,
+        suggestions: Vec<CommandSuggestion>,
+        selected: usize,
+    },
+    /// Issue creation flow
+    CreateIssue {
+        input: String,
+        stage: CreateStage,
+    },
+    /// Preview generated issue before creation
+    PreviewIssue {
+        issue: IssueContent,
+        messages: Vec<llm::Message>,
+        feedback_input: String,
+        scroll: u16,
+    },
+}
+
+/// Stages of issue creation
+#[derive(Clone)]
+pub enum CreateStage {
+    /// User typing description
+    Description,
+    /// Waiting for LLM
+    Generating,
+}
+
+/// Command suggestion for the command palette
+#[derive(Clone)]
+pub struct CommandSuggestion {
+    pub name: String,
+    pub description: String,
+    pub labels: Option<Vec<String>>,
 }
 
 /// Main TUI state
@@ -88,6 +130,10 @@ pub struct IssueBrowser {
     pub embedded_term: Option<crate::embedded_term::EmbeddedTerminal>,
     // Last session cache refresh time
     pub last_session_refresh: std::time::Instant,
+    // Project labels for issue creation
+    pub project_labels: Vec<String>,
+    // Available commands for command palette
+    pub available_commands: Vec<CommandSuggestion>,
 }
 
 impl IssueBrowser {
@@ -152,6 +198,8 @@ impl IssueBrowser {
             session_cache: std::collections::HashMap::new(),
             embedded_term: None,
             last_session_refresh: std::time::Instant::now(),
+            project_labels: Vec::new(),
+            available_commands: Vec::new(),
         }
     }
 
@@ -161,6 +209,29 @@ impl IssueBrowser {
         self.local_path = Some(path);
         // Load sessions for this project
         self.refresh_sessions(&name);
+    }
+
+    /// Set project labels for issue creation
+    pub fn set_project_labels(&mut self, labels: Vec<String>) {
+        self.project_labels = labels;
+    }
+
+    /// Set available commands for the command palette
+    pub fn set_available_commands(&mut self, commands: Vec<CommandSuggestion>) {
+        self.available_commands = commands;
+    }
+
+    /// Get filtered command suggestions based on input
+    pub fn get_command_suggestions(&self, input: &str) -> Vec<CommandSuggestion> {
+        if input.is_empty() {
+            return self.available_commands.clone();
+        }
+        let input_lower = input.to_lowercase();
+        self.available_commands
+            .iter()
+            .filter(|cmd| cmd.name.to_lowercase().contains(&input_lower))
+            .cloned()
+            .collect()
     }
 
     /// Refresh session cache for the current project
@@ -575,6 +646,33 @@ fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
         } => {
             draw_embedded_tmux(f, browser, available_sessions, *current_index);
         }
+        TuiView::ProjectSelect { projects, selected } => {
+            draw_project_select_inline(f, projects, *selected);
+        }
+        TuiView::Command {
+            input,
+            suggestions,
+            selected,
+        } => {
+            let input_clone = input.clone();
+            let suggestions_clone = suggestions.clone();
+            draw_command_palette(f, browser, &input_clone, &suggestions_clone, *selected);
+        }
+        TuiView::CreateIssue { input, stage } => {
+            let input_clone = input.clone();
+            let stage_clone = stage.clone();
+            draw_create_issue(f, &input_clone, &stage_clone);
+        }
+        TuiView::PreviewIssue {
+            issue,
+            feedback_input,
+            scroll,
+            ..
+        } => {
+            let issue_clone = issue.clone();
+            let feedback_clone = feedback_input.clone();
+            draw_preview_issue(f, &issue_clone, &feedback_clone, *scroll);
+        }
     }
 }
 
@@ -693,7 +791,7 @@ fn draw_list_view(f: &mut Frame, browser: &mut IssueBrowser) {
             parts.push(format!("[{} selected]", browser.selected_issues.len()));
         }
 
-        format!(" {} │ d dispatch │ t tmux │ l logs │ D diff │ p PR │ K kill │ / search │ q quit ", parts.join(" "))
+        format!(" {} │ C create │ d dispatch │ t tmux │ s search │ / cmd │ q quit ", parts.join(" "))
     };
 
     let list = List::new(items)
@@ -1301,6 +1399,285 @@ fn draw_embedded_tmux(
     }
 }
 
+/// Draw project selection inline (within issue browser)
+fn draw_project_select_inline(f: &mut Frame, projects: &[String], selected: usize) {
+    let area = f.area();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Select Project ")
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let items: Vec<ListItem> = projects
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let style = if i == selected {
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let prefix = if i == selected { "> " } else { "  " };
+            ListItem::new(Line::from(format!("{}{}", prefix, name))).style(style)
+        })
+        .collect();
+
+    let list = List::new(items);
+
+    let chunks = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).split(inner);
+
+    f.render_widget(list, chunks[0]);
+
+    let help = Paragraph::new("↑↓ navigate │ Enter select │ Esc cancel")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    f.render_widget(help, chunks[1]);
+}
+
+/// Draw command palette
+fn draw_command_palette(
+    f: &mut Frame,
+    browser: &IssueBrowser,
+    input: &str,
+    suggestions: &[CommandSuggestion],
+    selected: usize,
+) {
+    let area = f.area();
+
+    // Split: list on top (60%), command input at bottom (40%)
+    let chunks = Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(area);
+
+    // Draw issues list in background (dimmed)
+    draw_list_view_in_area_dimmed(f, browser, chunks[0]);
+
+    // Command palette panel
+    let cmd_area = chunks[1];
+    let title = if suggestions.is_empty() {
+        " Commands (no match) │ Esc cancel "
+    } else {
+        " Commands │ ↑↓ navigate │ Enter execute │ Esc cancel "
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let inner = block.inner(cmd_area);
+    f.render_widget(block, cmd_area);
+
+    // Split inner: input field + suggestions
+    let inner_chunks =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1)])
+            .split(inner);
+
+    // Input field with cursor
+    let input_text = format!("/{}_", input);
+    let input_para = Paragraph::new(input_text)
+        .style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD));
+    f.render_widget(input_para, inner_chunks[0]);
+
+    // Separator
+    let sep = Paragraph::new("─".repeat(inner_chunks[1].width as usize))
+        .style(Style::default().fg(Color::DarkGray));
+    f.render_widget(sep, inner_chunks[1]);
+
+    // Suggestions list
+    let items: Vec<ListItem> = suggestions
+        .iter()
+        .enumerate()
+        .map(|(i, cmd)| {
+            let is_selected = i == selected;
+            let prefix = if is_selected { "▸ " } else { "  " };
+            let style = if is_selected {
+                Style::default().bg(Color::DarkGray)
+            } else {
+                Style::default()
+            };
+
+            let line = Line::from(vec![
+                Span::raw(prefix),
+                Span::styled(
+                    format!("/{}", cmd.name),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(&cmd.description, Style::default().fg(Color::White)),
+            ]);
+            ListItem::new(line).style(style)
+        })
+        .collect();
+
+    let list = List::new(items);
+    f.render_widget(list, inner_chunks[2]);
+}
+
+/// Draw list view but dimmed (for overlay effect)
+fn draw_list_view_in_area_dimmed(f: &mut Frame, browser: &IssueBrowser, area: Rect) {
+    let items: Vec<ListItem> = browser
+        .issues
+        .iter()
+        .map(|issue| {
+            let labels_str = if issue.labels.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", issue.labels.join(", "))
+            };
+            let line = Line::from(vec![
+                Span::styled(
+                    format!("#{:<5}", issue.number),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(&issue.title, Style::default().fg(Color::DarkGray)),
+                Span::styled(labels_str, Style::default().fg(Color::DarkGray)),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Issues ")
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+
+    f.render_widget(list, area);
+}
+
+/// Draw issue creation screen
+fn draw_create_issue(f: &mut Frame, input: &str, stage: &CreateStage) {
+    let area = f.area();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Create Issue ")
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    match stage {
+        CreateStage::Description => {
+            let chunks =
+                Layout::vertical([Constraint::Length(2), Constraint::Min(3), Constraint::Length(2)])
+                    .split(inner);
+
+            let prompt = Paragraph::new("Describe the issue:")
+                .style(Style::default().fg(Color::White));
+            f.render_widget(prompt, chunks[0]);
+
+            let input_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow));
+            let input_text = if input.is_empty() {
+                "Type your issue description here..."
+            } else {
+                input
+            };
+            let input_style = if input.is_empty() {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let input_para = Paragraph::new(input_text)
+                .block(input_block)
+                .style(input_style)
+                .wrap(Wrap { trim: false });
+            f.render_widget(input_para, chunks[1]);
+
+            let help = Paragraph::new("Enter: generate │ Esc: cancel")
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(Alignment::Center);
+            f.render_widget(help, chunks[2]);
+        }
+        CreateStage::Generating => {
+            let text = Text::from(vec![
+                Line::from(""),
+                Line::styled(
+                    "Generating issue...",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Line::from(""),
+                Line::styled("Please wait...", Style::default().fg(Color::DarkGray)),
+            ]);
+            let para = Paragraph::new(text).alignment(Alignment::Center);
+            f.render_widget(para, inner);
+        }
+    }
+}
+
+/// Draw issue preview screen
+fn draw_preview_issue(f: &mut Frame, issue: &IssueContent, feedback_input: &str, scroll: u16) {
+    let area = f.area();
+
+    // Split: preview on top (75%), feedback input at bottom (25%)
+    let chunks = Layout::vertical([Constraint::Percentage(75), Constraint::Percentage(25)])
+        .split(area);
+
+    // Issue preview
+    let preview_block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Preview: {} ", issue.title))
+        .border_style(Style::default().fg(Color::Green));
+
+    let preview_inner = preview_block.inner(chunks[0]);
+    f.render_widget(preview_block, chunks[0]);
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("Type: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(&issue.type_, Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(vec![
+            Span::styled("Labels: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(issue.labels.join(", ")),
+        ]),
+        Line::from(""),
+        Line::styled("─── Body ───", Style::default().fg(Color::Yellow)),
+    ];
+
+    for line in issue.body.lines() {
+        lines.push(render_markdown_line(line));
+    }
+
+    let text = Text::from(lines);
+    let preview_para = Paragraph::new(text)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
+    f.render_widget(preview_para, preview_inner);
+
+    // Feedback input
+    let feedback_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Type feedback to refine, Enter to create, Esc to cancel ")
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let feedback_text = if feedback_input.is_empty() {
+        "Type feedback here or press Enter to create the issue..."
+    } else {
+        feedback_input
+    };
+    let feedback_style = if feedback_input.is_empty() {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let feedback_para = Paragraph::new(feedback_text)
+        .block(feedback_block)
+        .style(feedback_style)
+        .wrap(Wrap { trim: false });
+    f.render_widget(feedback_para, chunks[1]);
+}
+
 fn format_date(date_str: &str) -> String {
     // Simple date formatting: take first 10 chars if available
     if date_str.len() >= 10 {
@@ -1362,9 +1739,18 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                     }
                 }
             }
-            KeyCode::Char('/') => {
+            KeyCode::Char('s') => {
                 // Enter search mode
                 browser.view = TuiView::Search { input: String::new() };
+            }
+            KeyCode::Char('/') => {
+                // Open command palette
+                let suggestions = browser.available_commands.clone();
+                browser.view = TuiView::Command {
+                    input: String::new(),
+                    suggestions,
+                    selected: 0,
+                };
             }
             KeyCode::Char('c') => {
                 // Clear search filter
@@ -1595,7 +1981,7 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                     }
                 }
             }
-            KeyCode::Char('C') => {
+            KeyCode::Char('W') => {
                 // Cleanup worktree for agent of current issue
                 if let Some(issue) = browser.selected_issue() {
                     let issue_number = issue.number;
@@ -1625,6 +2011,17 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                     if let Some(project) = browser.project_name.clone() {
                         browser.refresh_sessions(&project);
                     }
+                }
+            }
+            KeyCode::Char('C') => {
+                // Create new issue
+                if browser.project_labels.is_empty() {
+                    browser.status_message = Some("No project labels configured.".to_string());
+                } else {
+                    browser.view = TuiView::CreateIssue {
+                        input: String::new(),
+                        stage: CreateStage::Description,
+                    };
                 }
             }
             _ => {}
@@ -2147,6 +2544,230 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
                 }
             }
         }
+        TuiView::ProjectSelect { projects, selected } => match key {
+            KeyCode::Esc => {
+                browser.view = TuiView::List;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if *selected > 0 {
+                    *selected -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if *selected < projects.len().saturating_sub(1) {
+                    *selected += 1;
+                }
+            }
+            KeyCode::Enter => {
+                // Project selected - this would typically trigger a callback
+                // For now, just return to list with a message
+                let project_name = projects.get(*selected).cloned();
+                browser.view = TuiView::List;
+                if let Some(name) = project_name {
+                    browser.status_message = Some(format!("Selected project: {}", name));
+                }
+            }
+            _ => {}
+        },
+        TuiView::Command {
+            input,
+            suggestions,
+            selected,
+        } => match key {
+            KeyCode::Esc => {
+                browser.view = TuiView::List;
+            }
+            KeyCode::Up => {
+                if *selected > 0 {
+                    *selected -= 1;
+                }
+            }
+            KeyCode::Down => {
+                if *selected < suggestions.len().saturating_sub(1) {
+                    *selected += 1;
+                }
+            }
+            KeyCode::Enter => {
+                // Execute the selected command
+                if let Some(cmd) = suggestions.get(*selected) {
+                    let cmd_name = cmd.name.clone();
+                    let labels = cmd.labels.clone();
+                    browser.view = TuiView::List;
+
+                    // Handle built-in commands
+                    match cmd_name.as_str() {
+                        "logout" => {
+                            let _ = auth::delete_token();
+                            browser.status_message = Some("Logged out.".to_string());
+                            browser.should_quit = true;
+                        }
+                        "project" | "repo" => {
+                            // Would show project selection - for now just message
+                            browser.status_message =
+                                Some("Use the main app to switch projects.".to_string());
+                        }
+                        _ => {
+                            // Custom list command - filter by labels
+                            if let Some(filter_labels) = labels {
+                                browser.list_labels = filter_labels;
+                                browser.status_message =
+                                    Some(format!("Filter applied: /{}", cmd_name));
+                                // Note: Would need to reload issues with new filter
+                            }
+                        }
+                    }
+                } else {
+                    browser.view = TuiView::List;
+                }
+            }
+            KeyCode::Backspace => {
+                input.pop();
+                // Filter suggestions based on new input
+                let input_clone = input.clone();
+                let available = browser.available_commands.clone();
+                *suggestions = if input_clone.is_empty() {
+                    available
+                } else {
+                    let input_lower = input_clone.to_lowercase();
+                    available
+                        .into_iter()
+                        .filter(|cmd| cmd.name.to_lowercase().contains(&input_lower))
+                        .collect()
+                };
+                *selected = 0;
+            }
+            KeyCode::Char(c) => {
+                input.push(c);
+                // Filter suggestions based on new input
+                let input_clone = input.clone();
+                let available = browser.available_commands.clone();
+                *suggestions = if input_clone.is_empty() {
+                    available
+                } else {
+                    let input_lower = input_clone.to_lowercase();
+                    available
+                        .into_iter()
+                        .filter(|cmd| cmd.name.to_lowercase().contains(&input_lower))
+                        .collect()
+                };
+                *selected = 0;
+            }
+            _ => {}
+        },
+        TuiView::CreateIssue { input, stage } => match key {
+            KeyCode::Esc => {
+                browser.view = TuiView::List;
+            }
+            KeyCode::Enter => {
+                if matches!(stage, CreateStage::Description) && !input.is_empty() {
+                    // Start generating
+                    let description = input.clone();
+                    let labels = browser.project_labels.clone();
+                    let endpoint = browser.llm_endpoint.clone();
+
+                    *stage = CreateStage::Generating;
+
+                    // Generate issue asynchronously
+                    match crate::issues::generate_issue_with_labels(&description, &labels, &endpoint)
+                        .await
+                    {
+                        Ok((issue, messages)) => {
+                            browser.view = TuiView::PreviewIssue {
+                                issue,
+                                messages,
+                                feedback_input: String::new(),
+                                scroll: 0,
+                            };
+                        }
+                        Err(e) => {
+                            browser.status_message = Some(format!("Generation failed: {}", e));
+                            browser.view = TuiView::List;
+                        }
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                if matches!(stage, CreateStage::Description) {
+                    input.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if matches!(stage, CreateStage::Description) {
+                    input.push(c);
+                }
+            }
+            _ => {}
+        },
+        TuiView::PreviewIssue {
+            issue,
+            messages,
+            feedback_input,
+            scroll,
+        } => match key {
+            KeyCode::Esc => {
+                browser.view = TuiView::List;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                *scroll = scroll.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                *scroll += 1;
+            }
+            KeyCode::Enter => {
+                if feedback_input.is_empty() {
+                    // Create the issue on GitHub
+                    let issue_clone = issue.clone();
+                    match browser.github.create_issue(&issue_clone).await {
+                        Ok(url) => {
+                            browser.status_message = Some(format!("Issue created: {}", url));
+                            browser.view = TuiView::List;
+                        }
+                        Err(e) => {
+                            browser.status_message = Some(format!("Failed to create: {}", e));
+                        }
+                    }
+                } else {
+                    // Refine the issue with feedback
+                    let feedback = feedback_input.clone();
+                    let endpoint = browser.llm_endpoint.clone();
+
+                    messages.push(llm::Message {
+                        role: "user".to_string(),
+                        content: feedback,
+                    });
+
+                    match llm::generate_response(messages, &endpoint).await {
+                        Ok(response) => {
+                            if let Ok(updated_issue) =
+                                serde_json::from_str::<IssueContent>(&response.message.content)
+                            {
+                                messages.push(llm::Message {
+                                    role: "assistant".to_string(),
+                                    content: serde_json::to_string(&updated_issue)
+                                        .unwrap_or_default(),
+                                });
+                                *issue = updated_issue;
+                                *feedback_input = String::new();
+                                *scroll = 0;
+                            } else {
+                                browser.status_message =
+                                    Some("Failed to parse updated issue.".to_string());
+                            }
+                        }
+                        Err(e) => {
+                            browser.status_message = Some(format!("Refinement failed: {}", e));
+                        }
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                feedback_input.pop();
+            }
+            KeyCode::Char(c) => {
+                feedback_input.push(c);
+            }
+            _ => {}
+        },
     }
 }
 
@@ -2292,6 +2913,362 @@ fn show_image_view(
 /// Open a URL in the default browser
 fn open_url(url: &str) {
     let _ = open::that(url);
+}
+
+/// Login screen state
+enum LoginState {
+    Initial,
+    WaitingForAuth { auth: DeviceFlowAuth },
+    Error(String),
+}
+
+/// Run the login screen TUI
+/// Returns Ok(Some(token)) on successful login, Ok(None) if user cancelled
+pub async fn run_login_screen(client_id: &str) -> io::Result<Option<String>> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut state = LoginState::Initial;
+    let mut result: Option<String> = None;
+    let mut should_quit = false;
+
+    while !should_quit {
+        terminal.draw(|f| {
+            draw_login_screen(f, &state);
+        })?;
+
+        match &state {
+            LoginState::Initial => {
+                if event::poll(std::time::Duration::from_millis(100))? {
+                    if let Event::Key(key) = event::read()? {
+                        if key.kind == KeyEventKind::Press {
+                            match key.code {
+                                KeyCode::Enter => {
+                                    // Start device flow
+                                    state = LoginState::Error("Starting authentication...".to_string());
+                                }
+                                KeyCode::Esc => {
+                                    should_quit = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+
+                // Check if we need to start the auth flow
+                if matches!(state, LoginState::Error(ref msg) if msg == "Starting authentication...") {
+                    // Temporarily exit TUI to start auth
+                    disable_raw_mode()?;
+                    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+
+                    match DeviceFlowAuth::start(client_id).await {
+                        Ok(auth) => {
+                            let _ = auth.open_browser();
+                            execute!(io::stdout(), EnterAlternateScreen)?;
+                            enable_raw_mode()?;
+                            state = LoginState::WaitingForAuth { auth };
+                        }
+                        Err(e) => {
+                            execute!(io::stdout(), EnterAlternateScreen)?;
+                            enable_raw_mode()?;
+                            state = LoginState::Error(format!("Auth failed: {}", e));
+                        }
+                    }
+                }
+            }
+            LoginState::WaitingForAuth { auth } => {
+                // Poll for events while waiting
+                if event::poll(std::time::Duration::from_millis(100))? {
+                    if let Event::Key(key) = event::read()? {
+                        if key.kind == KeyEventKind::Press && key.code == KeyCode::Esc {
+                            should_quit = true;
+                            continue;
+                        }
+                    }
+                }
+
+                // We need to own the auth to poll it, so we'll try once
+                // This is a bit tricky - we'll use a timeout approach
+                let poll_result = tokio::time::timeout(
+                    std::time::Duration::from_millis(500),
+                    check_auth_once(client_id, &auth.device_code, &auth.client_id),
+                )
+                .await;
+
+                match poll_result {
+                    Ok(Ok(Some(token))) => {
+                        if let Err(e) = auth::store_token(&token) {
+                            state = LoginState::Error(format!("Failed to store token: {}", e));
+                        } else {
+                            result = Some(token);
+                            should_quit = true;
+                        }
+                    }
+                    Ok(Ok(None)) => {
+                        // Still pending, continue waiting
+                    }
+                    Ok(Err(e)) => {
+                        state = LoginState::Error(format!("Auth failed: {}", e));
+                    }
+                    Err(_) => {
+                        // Timeout, continue waiting
+                    }
+                }
+            }
+            LoginState::Error(_) => {
+                if event::poll(std::time::Duration::from_millis(100))? {
+                    if let Event::Key(key) = event::read()? {
+                        if key.kind == KeyEventKind::Press {
+                            match key.code {
+                                KeyCode::Enter => {
+                                    state = LoginState::Initial;
+                                }
+                                KeyCode::Esc => {
+                                    should_quit = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+
+    Ok(result)
+}
+
+/// Check auth status once (helper for polling)
+async fn check_auth_once(
+    _client_id: &str,
+    device_code: &str,
+    client_id_stored: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+    let client = reqwest::Client::new();
+
+    let response = client
+        .post("https://github.com/login/oauth/access_token")
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id", client_id_stored),
+            ("device_code", device_code),
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+        ])
+        .send()
+        .await?;
+
+    let response_text = response.text().await?;
+
+    #[derive(serde::Deserialize)]
+    struct TokenResponse {
+        access_token: Option<String>,
+        error: Option<String>,
+    }
+
+    let data: TokenResponse = serde_json::from_str(&response_text)?;
+
+    if let Some(token) = data.access_token {
+        return Ok(Some(token));
+    }
+
+    if let Some(error) = data.error {
+        match error.as_str() {
+            "authorization_pending" | "slow_down" => Ok(None),
+            _ => Err(error.into()),
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+/// Draw the login screen
+fn draw_login_screen(f: &mut Frame, state: &LoginState) {
+    let area = f.area();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" GitHub Login ")
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let content = match state {
+        LoginState::Initial => {
+            vec![
+                Line::from(""),
+                Line::from(""),
+                Line::styled(
+                    "No GitHub connection detected.",
+                    Style::default().fg(Color::Yellow),
+                ),
+                Line::from(""),
+                Line::styled(
+                    "Press Enter to login...",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Line::styled("Press Esc to quit.", Style::default().fg(Color::DarkGray)),
+            ]
+        }
+        LoginState::WaitingForAuth { auth } => {
+            vec![
+                Line::from(""),
+                Line::styled(
+                    "Open this URL in your browser:",
+                    Style::default().fg(Color::White),
+                ),
+                Line::from(""),
+                Line::styled(
+                    format!("  {}", auth.verification_uri),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ),
+                Line::from(""),
+                Line::styled("Enter code:", Style::default().fg(Color::White)),
+                Line::from(""),
+                Line::styled(
+                    format!("  {}", auth.user_code),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Line::from(""),
+                Line::styled(
+                    "Waiting for authorization...",
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Line::from(""),
+                Line::styled("Press Esc to cancel.", Style::default().fg(Color::DarkGray)),
+            ]
+        }
+        LoginState::Error(msg) => {
+            vec![
+                Line::from(""),
+                Line::styled(msg.clone(), Style::default().fg(Color::Red)),
+                Line::from(""),
+                Line::styled(
+                    "Press Enter to retry, Esc to quit.",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]
+        }
+    };
+
+    let text = Text::from(content);
+    let paragraph = Paragraph::new(text).alignment(Alignment::Center);
+
+    f.render_widget(paragraph, inner);
+}
+
+/// Run project selection screen
+/// Returns the selected project name or None if cancelled
+pub async fn run_project_select(projects: Vec<String>) -> io::Result<Option<String>> {
+    if projects.is_empty() {
+        return Ok(None);
+    }
+
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut selected: usize = 0;
+    let mut result: Option<String> = None;
+    let mut should_quit = false;
+
+    while !should_quit {
+        terminal.draw(|f| {
+            draw_project_select_screen(f, &projects, selected);
+        })?;
+
+        if event::poll(std::time::Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('q') => {
+                            should_quit = true;
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if selected > 0 {
+                                selected -= 1;
+                            }
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if selected < projects.len() - 1 {
+                                selected += 1;
+                            }
+                        }
+                        KeyCode::Enter => {
+                            result = Some(projects[selected].clone());
+                            should_quit = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+
+    Ok(result)
+}
+
+/// Draw the project selection screen
+fn draw_project_select_screen(f: &mut Frame, projects: &[String], selected: usize) {
+    let area = f.area();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Select Project ")
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let items: Vec<ListItem> = projects
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let style = if i == selected {
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let prefix = if i == selected { "> " } else { "  " };
+            ListItem::new(Line::from(format!("{}{}", prefix, name))).style(style)
+        })
+        .collect();
+
+    let list = List::new(items).highlight_style(
+        Style::default()
+            .bg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
+    );
+
+    // Add instructions at the bottom
+    let chunks = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).split(inner);
+
+    f.render_widget(list, chunks[0]);
+
+    let help = Paragraph::new("↑↓ navigate │ Enter select │ q quit")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    f.render_widget(help, chunks[1]);
 }
 
 #[cfg(test)]
