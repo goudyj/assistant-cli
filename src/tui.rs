@@ -134,6 +134,8 @@ pub struct IssueBrowser {
     pub project_labels: Vec<String>,
     // Available commands for command palette
     pub available_commands: Vec<CommandSuggestion>,
+    // Last ESC press time for double-ESC quit
+    pub last_esc_press: Option<std::time::Instant>,
 }
 
 impl IssueBrowser {
@@ -200,6 +202,7 @@ impl IssueBrowser {
             last_session_refresh: std::time::Instant::now(),
             project_labels: Vec::new(),
             available_commands: Vec::new(),
+            last_esc_press: None,
         }
     }
 
@@ -1714,12 +1717,26 @@ fn attach_to_tmux_session(session_name: &str) -> io::Result<()> {
 }
 
 async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode) {
-    // Clear status message on any keypress
-    browser.status_message = None;
+    // Clear status message on any keypress (except ESC for double-ESC logic)
+    if key != KeyCode::Esc {
+        browser.status_message = None;
+        browser.last_esc_press = None; // Reset ESC state on other keys
+    }
 
     match &mut browser.view {
         TuiView::List => match key {
-            KeyCode::Esc | KeyCode::Char('q') => browser.should_quit = true,
+            KeyCode::Esc => {
+                // Double-ESC to quit
+                if let Some(last_press) = browser.last_esc_press {
+                    if last_press.elapsed() < std::time::Duration::from_secs(2) {
+                        browser.should_quit = true;
+                        return;
+                    }
+                }
+                browser.last_esc_press = Some(std::time::Instant::now());
+                browser.status_message = Some("Press ESC again to quit".to_string());
+            }
+            KeyCode::Char('q') => browser.should_quit = true,
             KeyCode::Down | KeyCode::Char('j') => {
                 browser.next();
                 // Check if we need to load more issues
