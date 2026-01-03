@@ -1829,9 +1829,9 @@ fn draw_direct_issue(f: &mut Frame, title: &str, body: &str, editing_body: bool)
 
     // Help
     let help_text = if editing_body {
-        "Enter: newline │ Tab: back to title │ Shift+Enter: create │ Esc: cancel"
+        "Enter: newline │ Tab: title │ Ctrl+S: create │ Esc: cancel"
     } else {
-        "Enter: edit body │ Tab: edit body │ Shift+Enter: create │ Esc: cancel"
+        "Enter: body │ Tab: body │ Ctrl+S: create │ Esc: cancel"
     };
     let help = Paragraph::new(help_text)
         .style(Style::default().fg(Color::DarkGray))
@@ -1880,8 +1880,6 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifiers: K
         browser.status_message = None;
         browser.last_esc_press = None; // Reset ESC state on other keys
     }
-
-    let shift_pressed = modifiers.contains(KeyModifiers::SHIFT);
 
     match &mut browser.view {
         TuiView::List => match key {
@@ -2973,30 +2971,31 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifiers: K
                 // Toggle between title and body editing
                 *editing_body = !*editing_body;
             }
-            KeyCode::Enter => {
-                if shift_pressed {
-                    // Shift+Enter: Create issue
-                    if title.is_empty() {
-                        browser.status_message = Some("Title cannot be empty".to_string());
-                    } else {
-                        let issue = IssueContent {
-                            type_: "task".to_string(),
-                            title: title.clone(),
-                            body: body.clone(),
-                            labels: Vec::new(),
-                        };
-                        match browser.github.create_issue(&issue).await {
-                            Ok(url) => {
-                                browser.status_message = Some(format!("Issue created: {}", url));
-                                browser.view = TuiView::List;
-                                browser.reload_issues().await;
-                            }
-                            Err(e) => {
-                                browser.status_message = Some(format!("Failed to create: {}", e));
-                            }
+            KeyCode::Char('s') | KeyCode::Char('S') if modifiers.contains(KeyModifiers::CONTROL) => {
+                // Ctrl+S: Create issue
+                if title.is_empty() {
+                    browser.status_message = Some("Title cannot be empty".to_string());
+                } else {
+                    let issue = IssueContent {
+                        type_: "task".to_string(),
+                        title: title.clone(),
+                        body: body.clone(),
+                        labels: Vec::new(),
+                    };
+                    match browser.github.create_issue(&issue).await {
+                        Ok(url) => {
+                            browser.status_message = Some(format!("Issue created: {}", url));
+                            browser.view = TuiView::List;
+                            browser.reload_issues().await;
+                        }
+                        Err(e) => {
+                            browser.status_message = Some(format!("Failed to create: {}", e));
                         }
                     }
-                } else if *editing_body {
+                }
+            }
+            KeyCode::Enter => {
+                if *editing_body {
                     // Enter in body: add newline
                     body.push('\n');
                 } else {
