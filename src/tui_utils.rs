@@ -37,8 +37,7 @@ pub fn attach_to_tmux_session(session_name: &str) -> io::Result<()> {
     enable_raw_mode()?;
 
     if !status.success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             "tmux attach failed",
         ));
     }

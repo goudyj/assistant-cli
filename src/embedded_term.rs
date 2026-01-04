@@ -166,8 +166,8 @@ impl EmbeddedTerminal {
         use crossterm::event::{KeyCode, KeyModifiers};
 
         // Handle Ctrl+key combinations
-        if modifiers.contains(KeyModifiers::CONTROL) {
-            if let KeyCode::Char(c) = key {
+        if modifiers.contains(KeyModifiers::CONTROL)
+            && let KeyCode::Char(c) = key {
                 // Ctrl+A = 1, Ctrl+B = 2, etc.
                 let ctrl_code = (c.to_ascii_lowercase() as u8).wrapping_sub(b'a').wrapping_add(1);
                 if ctrl_code <= 26 {
@@ -175,7 +175,6 @@ impl EmbeddedTerminal {
                     return;
                 }
             }
-        }
 
         // Default: send the key without modifiers
         self.send_key(key);

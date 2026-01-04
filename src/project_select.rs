@@ -37,17 +37,15 @@ pub async fn run_project_select(projects: Vec<String>) -> io::Result<Option<Stri
             draw_project_select_screen(f, &projects, selected);
         })?;
 
-        if event::poll(std::time::Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
+        if event::poll(std::time::Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+                && key.kind == KeyEventKind::Press {
                     match key.code {
                         KeyCode::Esc | KeyCode::Char('q') => {
                             should_quit = true;
                         }
                         KeyCode::Up | KeyCode::Char('k') => {
-                            if selected > 0 {
-                                selected -= 1;
-                            }
+                            selected = selected.saturating_sub(1);
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
                             if selected < projects.len() - 1 {
@@ -61,8 +59,6 @@ pub async fn run_project_select(projects: Vec<String>) -> io::Result<Option<Stri
                         _ => {}
                     }
                 }
-            }
-        }
     }
 
     disable_raw_mode()?;

@@ -43,9 +43,9 @@ pub async fn run_login_screen(client_id: &str) -> io::Result<Option<String>> {
 
         match &state {
             LoginState::Initial => {
-                if event::poll(std::time::Duration::from_millis(100))? {
-                    if let Event::Key(key) = event::read()? {
-                        if key.kind == KeyEventKind::Press {
+                if event::poll(std::time::Duration::from_millis(100))?
+                    && let Event::Key(key) = event::read()?
+                        && key.kind == KeyEventKind::Press {
                             match key.code {
                                 KeyCode::Enter => {
                                     // Start device flow
@@ -57,8 +57,6 @@ pub async fn run_login_screen(client_id: &str) -> io::Result<Option<String>> {
                                 _ => {}
                             }
                         }
-                    }
-                }
 
                 // Check if we need to start the auth flow
                 if matches!(state, LoginState::Error(ref msg) if msg == "Starting authentication...") {
@@ -83,14 +81,12 @@ pub async fn run_login_screen(client_id: &str) -> io::Result<Option<String>> {
             }
             LoginState::WaitingForAuth { auth } => {
                 // Poll for events while waiting
-                if event::poll(std::time::Duration::from_millis(100))? {
-                    if let Event::Key(key) = event::read()? {
-                        if key.kind == KeyEventKind::Press && key.code == KeyCode::Esc {
+                if event::poll(std::time::Duration::from_millis(100))?
+                    && let Event::Key(key) = event::read()?
+                        && key.kind == KeyEventKind::Press && key.code == KeyCode::Esc {
                             should_quit = true;
                             continue;
                         }
-                    }
-                }
 
                 // We need to own the auth to poll it, so we'll try once
                 // This is a bit tricky - we'll use a timeout approach
@@ -121,9 +117,9 @@ pub async fn run_login_screen(client_id: &str) -> io::Result<Option<String>> {
                 }
             }
             LoginState::Error(_) => {
-                if event::poll(std::time::Duration::from_millis(100))? {
-                    if let Event::Key(key) = event::read()? {
-                        if key.kind == KeyEventKind::Press {
+                if event::poll(std::time::Duration::from_millis(100))?
+                    && let Event::Key(key) = event::read()?
+                        && key.kind == KeyEventKind::Press {
                             match key.code {
                                 KeyCode::Enter => {
                                     state = LoginState::Initial;
@@ -134,8 +130,6 @@ pub async fn run_login_screen(client_id: &str) -> io::Result<Option<String>> {
                                 _ => {}
                             }
                         }
-                    }
-                }
             }
         }
     }

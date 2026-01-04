@@ -1730,12 +1730,11 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifiers: K
         TuiView::List => match key {
             KeyCode::Esc => {
                 // Double-ESC to quit
-                if let Some(last_press) = browser.last_esc_press {
-                    if last_press.elapsed() < std::time::Duration::from_secs(2) {
+                if let Some(last_press) = browser.last_esc_press
+                    && last_press.elapsed() < std::time::Duration::from_secs(2) {
                         browser.should_quit = true;
                         return;
                     }
-                }
                 browser.last_esc_press = Some(std::time::Instant::now());
                 browser.status_message = Some("Press ESC again to quit".to_string());
             }
@@ -1831,11 +1830,10 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifiers: K
                             skipped += 1;
                             continue;
                         }
-                        if let Ok(detail) = browser.github.get_issue(*issue_number).await {
-                            if crate::agents::dispatch_to_claude(&detail, &local_path, &project_name).await.is_ok() {
+                        if let Ok(detail) = browser.github.get_issue(*issue_number).await
+                            && crate::agents::dispatch_to_claude(&detail, &local_path, &project_name).await.is_ok() {
                                 dispatched += 1;
                             }
-                        }
                     }
 
                     if skipped > 0 {
