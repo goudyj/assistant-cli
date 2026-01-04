@@ -12,6 +12,9 @@ pub mod login_screen;
 pub mod markdown;
 pub mod project_select;
 pub mod tui;
+pub mod tui_draw;
+pub mod tui_events;
+pub mod tui_image;
 pub mod tui_types;
 pub mod tui_utils;
 
