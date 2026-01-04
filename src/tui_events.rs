@@ -989,6 +989,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                             browser.status_message = Some(format!("Issue created: {}", url));
                             browser.all_issues.insert(0, new_issue.clone());
                             browser.issues.insert(0, new_issue);
+                            *browser.list_state.offset_mut() = 0;
                             browser.list_state.select(Some(0));
                             browser.view = TuiView::List;
                         }
@@ -1063,6 +1064,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                                 browser.status_message = Some(format!("Issue created: {}", url));
                                 browser.all_issues.insert(0, new_issue.clone());
                                 browser.issues.insert(0, new_issue);
+                                *browser.list_state.offset_mut() = 0;
                                 browser.list_state.select(Some(0));
                                 browser.view = TuiView::List;
                             }
@@ -1089,6 +1091,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                                 browser.status_message = Some(format!("Issue created: {}", url));
                                 browser.all_issues.insert(0, new_issue.clone());
                                 browser.issues.insert(0, new_issue);
+                                *browser.list_state.offset_mut() = 0;
                                 browser.list_state.select(Some(0));
                                 browser.view = TuiView::List;
                             }
