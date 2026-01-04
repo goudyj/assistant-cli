@@ -10,6 +10,7 @@ pub mod list;
 pub mod llm;
 pub mod markdown;
 pub mod tui;
+pub mod tui_utils;
 
 #[cfg(test)]
 pub mod test_helpers;

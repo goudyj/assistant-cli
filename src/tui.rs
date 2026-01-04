@@ -5,6 +5,7 @@ use crate::images::extract_image_urls;
 use crate::issues::IssueContent;
 use crate::llm;
 use crate::markdown::{parse_markdown_content, render_markdown_line};
+use crate::tui_utils::{format_date, open_url};
 use crossterm::{
     event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
@@ -1714,41 +1715,6 @@ fn draw_direct_issue(f: &mut Frame, title: &str, body: &str, editing_body: bool,
     f.render_widget(help, chunks[3]);
 }
 
-fn format_date(date_str: &str) -> String {
-    // Simple date formatting: take first 10 chars if available
-    if date_str.len() >= 10 {
-        date_str[..10].to_string()
-    } else {
-        date_str.to_string()
-    }
-}
-
-/// Attach to a tmux session, temporarily exiting the TUI
-#[allow(dead_code)]
-fn attach_to_tmux_session(session_name: &str) -> io::Result<()> {
-    // Exit raw mode and alternate screen
-    disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen)?;
-
-    // Run tmux attach interactively
-    let status = std::process::Command::new("tmux")
-        .args(["attach", "-t", session_name])
-        .status()?;
-
-    // Re-enter alternate screen and raw mode
-    execute!(io::stdout(), EnterAlternateScreen)?;
-    enable_raw_mode()?;
-
-    if !status.success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "tmux attach failed",
-        ));
-    }
-
-    Ok(())
-}
-
 async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifiers: KeyModifiers) {
     // Clear status message on any keypress (except ESC for double-ESC logic)
     if key != KeyCode::Esc {
@@ -3095,11 +3061,6 @@ fn show_image_view(
     terminal.clear()?;
 
     Ok(())
-}
-
-/// Open a URL in the default browser
-fn open_url(url: &str) {
-    let _ = open::that(url);
 }
 
 /// Login screen state
