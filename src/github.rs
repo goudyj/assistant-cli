@@ -82,7 +82,8 @@ impl GitHubConfig {
             .map_err(|e| GitHubError::ApiError(e.to_string()))
     }
 
-    pub async fn create_issue(&self, issue: &IssueContent) -> Result<String, GitHubError> {
+    /// Create an issue and return (html_url, IssueSummary)
+    pub async fn create_issue(&self, issue: &IssueContent) -> Result<(String, IssueSummary), GitHubError> {
         let client = self.get_client()?;
 
         let created = client
@@ -94,7 +95,16 @@ impl GitHubConfig {
             .await
             .map_err(Self::map_api_error)?;
 
-        Ok(created.html_url.to_string())
+        let summary = IssueSummary {
+            number: created.number,
+            title: created.title,
+            html_url: created.html_url.to_string(),
+            labels: created.labels.iter().map(|l| l.name.clone()).collect(),
+            state: "Open".to_string(),
+            assignees: created.assignees.iter().map(|a| a.login.clone()).collect(),
+        };
+
+        Ok((created.html_url.to_string(), summary))
     }
 
     pub async fn list_issues(

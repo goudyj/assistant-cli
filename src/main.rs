@@ -797,7 +797,7 @@ async fn handle_ok_command(state: &mut AppState) {
     let github = GitHubConfig::new(project.owner.clone(), project.repo.clone(), token.clone());
 
     match github.create_issue(&session.issue).await {
-        Ok(url) => {
+        Ok((url, _)) => {
             print_colored_message(&format!("Issue created: {}\n", url), Color::Green);
             state.issue_session = None;
         }

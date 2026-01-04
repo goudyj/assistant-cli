@@ -739,7 +739,7 @@ fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
             body,
             editing_body,
         } => {
-            draw_direct_issue(f, title, body, *editing_body);
+            draw_direct_issue(f, title, body, *editing_body, browser.status_message.as_deref());
         }
     }
 }
@@ -924,10 +924,29 @@ fn draw_list_view_in_area(f: &mut Frame, browser: &mut IssueBrowser, area: Rect)
         })
         .collect();
 
-    let title = if let Some(ref query) = browser.search_query {
-        format!(" Issues (filtered: '{}') ", query)
-    } else {
-        " Issues ".to_string()
+    let title = {
+        let mut parts = Vec::new();
+        parts.push("Issues".to_string());
+
+        if let Some(ref query) = browser.search_query {
+            parts.push(format!("(filtered: '{}')", query));
+        }
+
+        if browser.has_next_page {
+            parts.push(format!("[{} loaded, more available]", browser.all_issues.len()));
+        } else if browser.all_issues.len() > 20 {
+            parts.push(format!("[{} total]", browser.all_issues.len()));
+        }
+
+        if browser.is_loading {
+            parts.push("[Loading...]".to_string());
+        }
+
+        if !browser.selected_issues.is_empty() {
+            parts.push(format!("[{} selected]", browser.selected_issues.len()));
+        }
+
+        format!(" {} │ C ai │ N new │ R refresh │ d dispatch │ t tmux │ s search │ / cmd │ q quit ", parts.join(" "))
     };
 
     let list = List::new(items)
@@ -1747,7 +1766,7 @@ fn draw_preview_issue(f: &mut Frame, issue: &IssueContent, feedback_input: &str,
 }
 
 /// Draw direct issue creation screen (no AI)
-fn draw_direct_issue(f: &mut Frame, title: &str, body: &str, editing_body: bool) {
+fn draw_direct_issue(f: &mut Frame, title: &str, body: &str, editing_body: bool, status_message: Option<&str>) {
     let area = f.area();
 
     let block = Block::default()
@@ -1758,11 +1777,12 @@ fn draw_direct_issue(f: &mut Frame, title: &str, body: &str, editing_body: bool)
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Split: title field, body field, help
+    // Split: title field, body field, status, help
     let chunks = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(5),
-        Constraint::Length(2),
+        Constraint::Length(1),
+        Constraint::Length(1),
     ])
     .split(inner);
 
@@ -1827,16 +1847,24 @@ fn draw_direct_issue(f: &mut Frame, title: &str, body: &str, editing_body: bool)
     .wrap(Wrap { trim: false });
     f.render_widget(body_para, chunks[1]);
 
+    // Status message
+    if let Some(msg) = status_message {
+        let status = Paragraph::new(msg)
+            .style(Style::default().fg(Color::Yellow))
+            .alignment(Alignment::Center);
+        f.render_widget(status, chunks[2]);
+    }
+
     // Help
     let help_text = if editing_body {
-        "Enter: newline │ Tab: title │ Ctrl+S: create │ Esc: cancel"
+        "Enter: newline │ Tab: title │ Shift+Enter/Ctrl+S: create │ Esc: cancel"
     } else {
-        "Enter: body │ Tab: body │ Ctrl+S: create │ Esc: cancel"
+        "Enter: body │ Tab: body │ Shift+Enter/Ctrl+S: create │ Esc: cancel"
     };
     let help = Paragraph::new(help_text)
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Center);
-    f.render_widget(help, chunks[2]);
+    f.render_widget(help, chunks[3]);
 }
 
 fn format_date(date_str: &str) -> String {
@@ -2907,11 +2935,13 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifiers: K
                     // Create the issue on GitHub
                     let issue_clone = issue.clone();
                     match browser.github.create_issue(&issue_clone).await {
-                        Ok(url) => {
+                        Ok((url, new_issue)) => {
                             browser.status_message = Some(format!("Issue created: {}", url));
+                            // Insert new issue at the beginning of the list
+                            browser.all_issues.insert(0, new_issue.clone());
+                            browser.issues.insert(0, new_issue);
+                            browser.list_state.select(Some(0));
                             browser.view = TuiView::List;
-                            // Refresh issue list
-                            browser.reload_issues().await;
                         }
                         Err(e) => {
                             browser.status_message = Some(format!("Failed to create: {}", e));
@@ -2963,7 +2993,8 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifiers: K
             title,
             body,
             editing_body,
-        } => match key {
+        } => {
+            match key {
             KeyCode::Esc => {
                 browser.view = TuiView::List;
             }
@@ -2971,8 +3002,8 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifiers: K
                 // Toggle between title and body editing
                 *editing_body = !*editing_body;
             }
-            KeyCode::Char('s') | KeyCode::Char('S') if modifiers.contains(KeyModifiers::CONTROL) => {
-                // Ctrl+S: Create issue
+            KeyCode::Enter if modifiers.contains(KeyModifiers::SHIFT) => {
+                // Shift+Enter: Create issue
                 if title.is_empty() {
                     browser.status_message = Some("Title cannot be empty".to_string());
                 } else {
@@ -2983,10 +3014,40 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifiers: K
                         labels: Vec::new(),
                     };
                     match browser.github.create_issue(&issue).await {
-                        Ok(url) => {
+                        Ok((url, new_issue)) => {
                             browser.status_message = Some(format!("Issue created: {}", url));
+                            // Insert new issue at the beginning of the list
+                            browser.all_issues.insert(0, new_issue.clone());
+                            browser.issues.insert(0, new_issue);
+                            browser.list_state.select(Some(0));
                             browser.view = TuiView::List;
-                            browser.reload_issues().await;
+                        }
+                        Err(e) => {
+                            browser.status_message = Some(format!("Failed to create: {}", e));
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('s') | KeyCode::Char('j') if modifiers.contains(KeyModifiers::CONTROL) => {
+                // Ctrl+S or Ctrl+J: Create issue
+                // Note: Ghostty sends Ctrl+J for Shift+Enter
+                if title.is_empty() {
+                    browser.status_message = Some("Title cannot be empty".to_string());
+                } else {
+                    let issue = IssueContent {
+                        type_: "task".to_string(),
+                        title: title.clone(),
+                        body: body.clone(),
+                        labels: Vec::new(),
+                    };
+                    match browser.github.create_issue(&issue).await {
+                        Ok((url, new_issue)) => {
+                            browser.status_message = Some(format!("Issue created: {}", url));
+                            // Insert new issue at the beginning of the list
+                            browser.all_issues.insert(0, new_issue.clone());
+                            browser.issues.insert(0, new_issue);
+                            browser.list_state.select(Some(0));
+                            browser.view = TuiView::List;
                         }
                         Err(e) => {
                             browser.status_message = Some(format!("Failed to create: {}", e));
@@ -3018,7 +3079,8 @@ async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifiers: K
                 }
             }
             _ => {}
-        },
+            }
+        }
     }
 }
 
