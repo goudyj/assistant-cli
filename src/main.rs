@@ -127,6 +127,16 @@ async fn main() {
             description: "Switch repository".to_string(),
             labels: None,
         },
+        CommandSuggestion {
+            name: "worktrees".to_string(),
+            description: "Manage worktrees (view, delete, open IDE)".to_string(),
+            labels: None,
+        },
+        CommandSuggestion {
+            name: "prune".to_string(),
+            description: "Clean up orphaned worktrees".to_string(),
+            labels: None,
+        },
     ];
 
     // Add custom list commands from project config
