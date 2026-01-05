@@ -317,12 +317,37 @@ pub fn draw_list_view(f: &mut Frame, browser: &mut IssueBrowser) {
     f.render_stateful_widget(list, f.area(), &mut browser.list_state);
 }
 
-/// Draw list view in a specific area
+/// Draw list view in a specific area (with full formatting like draw_list_view)
 pub fn draw_list_view_in_area(f: &mut Frame, browser: &mut IssueBrowser, area: Rect) {
+    use crate::agents::AgentStatus;
+
     let items: Vec<ListItem> = browser
         .issues
         .iter()
         .map(|issue| {
+            let is_selected = browser.selected_issues.contains(&issue.number);
+            let select_marker = if is_selected { "[x] " } else { "[ ] " };
+
+            let session_info = browser.session_cache.get(&issue.number);
+            let (session_icon, session_color, session_stats) = match session_info {
+                Some(session) => {
+                    let (icon, color) = match &session.status {
+                        AgentStatus::Running => ("▶", Color::Yellow),
+                        AgentStatus::Awaiting => ("⏸", Color::Cyan),
+                        AgentStatus::Completed { .. } => ("✓", Color::Green),
+                        AgentStatus::Failed { .. } => ("✗", Color::Red),
+                    };
+                    let stats = if session.stats.lines_added > 0 || session.stats.lines_deleted > 0
+                    {
+                        format!(" +{} -{}", session.stats.lines_added, session.stats.lines_deleted)
+                    } else {
+                        String::new()
+                    };
+                    (Some(icon), color, stats)
+                }
+                None => (None, Color::DarkGray, String::new()),
+            };
+
             let labels_str = if issue.labels.is_empty() {
                 String::new()
             } else {
@@ -336,6 +361,14 @@ pub fn draw_list_view_in_area(f: &mut Frame, browser: &mut IssueBrowser, area: R
             let is_closed = issue.state == "Closed";
             let line = if is_closed {
                 Line::from(vec![
+                    Span::styled(
+                        select_marker,
+                        if is_selected {
+                            Style::default().fg(Color::Green)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        },
+                    ),
                     Span::styled(
                         format!("#{:<5}", issue.number),
                         Style::default().fg(Color::DarkGray),
@@ -351,12 +384,29 @@ pub fn draw_list_view_in_area(f: &mut Frame, browser: &mut IssueBrowser, area: R
                     Span::styled(assignees_str, Style::default().fg(Color::DarkGray)),
                 ])
             } else {
+                let session_span = if let Some(icon) = session_icon {
+                    Span::styled(
+                        format!("{}{} ", icon, session_stats),
+                        Style::default().fg(session_color),
+                    )
+                } else {
+                    Span::raw("   ")
+                };
+
                 Line::from(vec![
+                    Span::styled(
+                        select_marker,
+                        if is_selected {
+                            Style::default().fg(Color::Green)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        },
+                    ),
                     Span::styled(
                         format!("#{:<5}", issue.number),
                         Style::default().fg(Color::Cyan),
                     ),
-                    Span::raw("   "),
+                    session_span,
                     Span::raw(&issue.title),
                     Span::styled(labels_str, Style::default().fg(Color::DarkGray)),
                     Span::styled(assignees_str, Style::default().fg(Color::Magenta)),
