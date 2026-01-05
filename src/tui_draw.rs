@@ -226,8 +226,9 @@ pub fn draw_list_view_in_area(f: &mut Frame, browser: &mut IssueBrowser, area: R
                     let (icon, color) = match &session.status {
                         AgentStatus::Running => ("▶", Color::Yellow),
                         AgentStatus::Awaiting => ("⏸", Color::Cyan),
-                        AgentStatus::Completed { .. } => ("✓", Color::Green),
-                        AgentStatus::Failed { .. } => ("✗", Color::Red),
+                        AgentStatus::Completed { .. } | AgentStatus::Failed { .. } => {
+                            ("•", Color::DarkGray)
+                        }
                     };
                     let stats = if session.stats.lines_added > 0 || session.stats.lines_deleted > 0
                     {
