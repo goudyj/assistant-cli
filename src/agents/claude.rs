@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
@@ -127,6 +127,7 @@ pub fn tmux_session_name(project: &str, issue_number: u64) -> String {
 pub fn is_tmux_session_running(session_name: &str) -> bool {
     Command::new("tmux")
         .args(["has-session", "-t", session_name])
+        .stderr(Stdio::null())
         .status()
         .map(|s| s.success())
         .unwrap_or(false)

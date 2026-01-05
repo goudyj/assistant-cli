@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use super::{cache_dir, sessions_file};
 
@@ -152,6 +152,7 @@ impl SessionManager {
                 let tmux_name = session.tmux_session_name();
                 let tmux_exists = Command::new("tmux")
                     .args(["has-session", "-t", &tmux_name])
+                    .stderr(Stdio::null())
                     .status()
                     .map(|s| s.success())
                     .unwrap_or(false);
