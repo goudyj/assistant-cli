@@ -36,8 +36,8 @@ async fn main() {
     };
 
     // 1. Check for token - if none, show login screen
-    let token = match auth::get_stored_token() {
-        Ok(t) => t,
+    let (token, config) = match auth::get_stored_token() {
+        Ok(t) => (t, config),
         Err(_) => {
             // No token - show login screen
             let Some(ref client_id) = config.github_client_id else {
@@ -48,7 +48,11 @@ async fn main() {
             };
 
             match tui::run_login_screen(client_id).await {
-                Ok(Some(t)) => t,
+                Ok(Some(t)) => {
+                    // Reload config to include the newly saved token
+                    let updated_config = config::load_config().unwrap_or(config);
+                    (t, updated_config)
+                }
                 Ok(None) => return, // User cancelled
                 Err(e) => {
                     eprintln!("Login error: {}", e);
