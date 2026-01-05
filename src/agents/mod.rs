@@ -9,7 +9,10 @@ pub use claude::{
     list_tmux_sessions, resume_monitoring_for_running_sessions, tmux_session_name,
 };
 pub use session::{AgentSession, AgentStats, AgentStatus, SessionManager};
-pub use worktree::{create_worktree, get_diff_stats, remove_worktree, WorktreeError};
+pub use worktree::{
+    create_worktree, get_diff_stats, list_orphaned_worktrees, list_worktrees, open_in_ide,
+    prune_worktrees, remove_worktree, WorktreeError, WorktreeInfo,
+};
 
 use std::path::PathBuf;
 use uuid::Uuid;

@@ -291,6 +291,157 @@ fn parse_numstat(stdout: &str) -> (usize, usize, usize) {
     (lines_added, lines_deleted, files_changed)
 }
 
+/// Information about a worktree on disk
+#[derive(Debug, Clone)]
+pub struct WorktreeInfo {
+    /// Full path to the worktree
+    pub path: PathBuf,
+    /// Worktree directory name (e.g., "project-123")
+    pub name: String,
+    /// Project name extracted from the worktree name
+    pub project: String,
+    /// Issue number extracted from the worktree name
+    pub issue_number: Option<u64>,
+    /// Whether this worktree has an active session
+    pub has_session: bool,
+    /// Whether there's a running tmux session for this worktree
+    pub has_tmux: bool,
+}
+
+/// List all worktrees in the cache directory with their status.
+pub fn list_worktrees() -> Vec<WorktreeInfo> {
+    let worktrees_path = worktrees_dir();
+    if !worktrees_path.exists() {
+        return Vec::new();
+    }
+
+    let mut worktrees = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&worktrees_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                // Parse project and issue number from name (format: "project-123")
+                let (project, issue_number) = parse_worktree_name(&name);
+
+                worktrees.push(WorktreeInfo {
+                    path,
+                    name,
+                    project,
+                    issue_number,
+                    has_session: false, // Will be filled in by caller
+                    has_tmux: false,    // Will be filled in by caller
+                });
+            }
+        }
+    }
+
+    worktrees.sort_by(|a, b| a.name.cmp(&b.name));
+    worktrees
+}
+
+/// Parse worktree name into project and issue number.
+/// Format: "project-name-123" -> ("project-name", Some(123))
+fn parse_worktree_name(name: &str) -> (String, Option<u64>) {
+    // Find the last dash followed by digits
+    if let Some(pos) = name.rfind('-') {
+        let (project, num_part) = name.split_at(pos);
+        if let Ok(num) = num_part[1..].parse::<u64>() {
+            return (project.to_string(), Some(num));
+        }
+    }
+    (name.to_string(), None)
+}
+
+/// List orphaned worktrees (those without active sessions).
+pub fn list_orphaned_worktrees(session_worktrees: &[PathBuf]) -> Vec<WorktreeInfo> {
+    list_worktrees()
+        .into_iter()
+        .filter(|w| !session_worktrees.contains(&w.path))
+        .collect()
+}
+
+/// Open a worktree in the configured IDE.
+pub fn open_in_ide(worktree_path: &Path, ide_command: Option<&str>) -> Result<(), WorktreeError> {
+    let cmd = ide_command.unwrap_or_else(|| detect_ide());
+
+    let output = Command::new(cmd)
+        .arg(worktree_path)
+        .spawn();
+
+    match output {
+        Ok(_) => Ok(()),
+        Err(e) => Err(WorktreeError::GitError(format!(
+            "Failed to open IDE '{}': {}",
+            cmd, e
+        ))),
+    }
+}
+
+/// Auto-detect available IDE command.
+fn detect_ide() -> &'static str {
+    // Check for cursor first, then VS Code
+    for cmd in ["cursor", "code"] {
+        if Command::new("which")
+            .arg(cmd)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return match cmd {
+                "cursor" => "cursor",
+                _ => "code",
+            };
+        }
+    }
+    "code" // Default fallback
+}
+
+/// Remove multiple worktrees and their branches.
+pub fn prune_worktrees(worktrees: &[WorktreeInfo]) -> Vec<(String, Result<(), WorktreeError>)> {
+    let mut results = Vec::new();
+
+    for worktree in worktrees {
+        // We need a parent repo to remove worktrees properly
+        // Try to find the original repo by looking at git config
+        let result = if let Some(local_path) = find_parent_repo(&worktree.path) {
+            remove_worktree(&local_path, &worktree.path, true)
+        } else {
+            // Fallback: just remove the directory
+            std::fs::remove_dir_all(&worktree.path)
+                .map_err(WorktreeError::from)
+        };
+
+        results.push((worktree.name.clone(), result));
+    }
+
+    results
+}
+
+/// Try to find the parent git repository for a worktree.
+fn find_parent_repo(worktree_path: &Path) -> Option<PathBuf> {
+    // Read .git file which points to the parent repo
+    let git_file = worktree_path.join(".git");
+    if git_file.exists() {
+        if let Ok(content) = std::fs::read_to_string(&git_file) {
+            // Format: "gitdir: /path/to/repo/.git/worktrees/name"
+            if let Some(gitdir) = content.strip_prefix("gitdir: ") {
+                let gitdir = PathBuf::from(gitdir.trim());
+                // Go up from .git/worktrees/name to the repo root
+                if let Some(worktrees_dir) = gitdir.parent() {
+                    if let Some(git_dir) = worktrees_dir.parent() {
+                        if let Some(repo_root) = git_dir.parent() {
+                            return Some(repo_root.to_path_buf());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,6 +451,27 @@ mod tests {
         let path = worktrees_dir().join("test-project-123");
         assert!(path.to_str().unwrap().contains("worktrees"));
         assert!(path.to_str().unwrap().contains("test-project-123"));
+    }
+
+    #[test]
+    fn parse_worktree_name_simple() {
+        let (project, num) = parse_worktree_name("myproject-42");
+        assert_eq!(project, "myproject");
+        assert_eq!(num, Some(42));
+    }
+
+    #[test]
+    fn parse_worktree_name_with_dashes() {
+        let (project, num) = parse_worktree_name("my-cool-project-123");
+        assert_eq!(project, "my-cool-project");
+        assert_eq!(num, Some(123));
+    }
+
+    #[test]
+    fn parse_worktree_name_no_number() {
+        let (project, num) = parse_worktree_name("myproject");
+        assert_eq!(project, "myproject");
+        assert_eq!(num, None);
     }
 
     // Integration tests would require actual git repos

@@ -79,6 +79,8 @@ pub struct IssueBrowser {
     pub last_esc_press: Option<std::time::Instant>,
     // Available projects for repository switching
     pub available_projects: Vec<(String, ProjectConfig)>,
+    // IDE command for opening worktrees
+    pub ide_command: Option<String>,
 }
 
 impl IssueBrowser {
@@ -147,7 +149,36 @@ impl IssueBrowser {
             available_commands: Vec::new(),
             last_esc_press: None,
             available_projects: Vec::new(),
+            ide_command: None,
         }
+    }
+
+    /// Set the IDE command for opening worktrees
+    pub fn set_ide_command(&mut self, command: Option<String>) {
+        self.ide_command = command;
+    }
+
+    /// Build worktree list with session status
+    pub fn build_worktree_list(&self) -> Vec<crate::agents::WorktreeInfo> {
+        let manager = crate::agents::SessionManager::load();
+        let session_worktrees: Vec<_> = manager.list().iter().map(|s| s.worktree_path.clone()).collect();
+
+        let mut worktrees = crate::agents::list_worktrees();
+        for wt in &mut worktrees {
+            wt.has_session = session_worktrees.contains(&wt.path);
+            if let Some(issue_num) = wt.issue_number {
+                let tmux_name = crate::agents::tmux_session_name(&wt.project, issue_num);
+                wt.has_tmux = crate::agents::is_tmux_session_running(&tmux_name);
+            }
+        }
+        worktrees
+    }
+
+    /// Get orphaned worktrees (no active session)
+    pub fn get_orphaned_worktrees(&self) -> Vec<crate::agents::WorktreeInfo> {
+        let manager = crate::agents::SessionManager::load();
+        let session_worktrees: Vec<_> = manager.list().iter().map(|s| s.worktree_path.clone()).collect();
+        crate::agents::list_orphaned_worktrees(&session_worktrees)
     }
 
     /// Set project info for Claude Code dispatch
@@ -200,6 +231,16 @@ impl IssueBrowser {
             CommandSuggestion {
                 name: "repository".to_string(),
                 description: "Switch repository".to_string(),
+                labels: None,
+            },
+            CommandSuggestion {
+                name: "worktrees".to_string(),
+                description: "Manage worktrees (view, delete, open IDE)".to_string(),
+                labels: None,
+            },
+            CommandSuggestion {
+                name: "prune".to_string(),
+                description: "Clean up orphaned worktrees".to_string(),
                 labels: None,
             },
         ];
@@ -494,6 +535,7 @@ pub async fn run_issue_browser(
         Vec::new(),
         Vec::new(),
         Vec::new(),
+        None,
     )
     .await
 }
@@ -514,6 +556,7 @@ pub async fn run_issue_browser_with_pagination(
     project_labels: Vec<String>,
     available_commands: Vec<CommandSuggestion>,
     available_projects: Vec<(String, ProjectConfig)>,
+    ide_command: Option<String>,
 ) -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -541,6 +584,7 @@ pub async fn run_issue_browser_with_pagination(
     browser.set_project_labels(project_labels);
     browser.set_available_commands(available_commands);
     browser.set_available_projects(available_projects);
+    browser.set_ide_command(ide_command);
 
     // Resume monitoring threads for any running sessions from previous process
     crate::agents::resume_monitoring_for_running_sessions();

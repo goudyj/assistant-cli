@@ -1,5 +1,6 @@
 //! TUI type definitions.
 
+use crate::agents::WorktreeInfo;
 use crate::github::IssueDetail;
 use crate::issues::IssueContent;
 use crate::llm;
@@ -63,6 +64,15 @@ pub enum TuiView {
         title: String,
         body: String,
         editing_body: bool,
+    },
+    /// Worktree management list
+    WorktreeList {
+        worktrees: Vec<WorktreeInfo>,
+        selected: usize,
+    },
+    /// Confirm prune of orphaned worktrees
+    ConfirmPrune {
+        orphaned: Vec<WorktreeInfo>,
     },
 }
 

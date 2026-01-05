@@ -300,6 +300,25 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                     }
                 }
             }
+            KeyCode::Char('o') => {
+                if let Some(issue) = browser.selected_issue() {
+                    let issue_number = issue.number;
+                    if let Some(session) = browser.session_cache.get(&issue_number) {
+                        let ide_cmd = browser.ide_command.as_deref();
+                        match crate::agents::open_in_ide(&session.worktree_path, ide_cmd) {
+                            Ok(_) => {
+                                browser.status_message =
+                                    Some(format!("Opened worktree for #{} in IDE", issue_number));
+                            }
+                            Err(e) => {
+                                browser.status_message = Some(format!("Failed to open IDE: {}", e));
+                            }
+                        }
+                    } else {
+                        browser.status_message = Some("No worktree for this issue".to_string());
+                    }
+                }
+            }
             KeyCode::Char('W') => {
                 if let Some(issue) = browser.selected_issue() {
                     let issue_number = issue.number;
@@ -934,6 +953,26 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                                 };
                             }
                         }
+                        "worktrees" => {
+                            let worktrees = browser.build_worktree_list();
+                            if worktrees.is_empty() {
+                                browser.status_message = Some("No worktrees found.".to_string());
+                            } else {
+                                browser.view = TuiView::WorktreeList {
+                                    worktrees,
+                                    selected: 0,
+                                };
+                            }
+                        }
+                        "prune" => {
+                            let orphaned = browser.get_orphaned_worktrees();
+                            if orphaned.is_empty() {
+                                browser.status_message =
+                                    Some("No orphaned worktrees to clean up.".to_string());
+                            } else {
+                                browser.view = TuiView::ConfirmPrune { orphaned };
+                            }
+                        }
                         _ => {
                             if let Some(filter_labels) = labels {
                                 browser.list_labels = filter_labels.clone();
@@ -1166,6 +1205,169 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                 _ => {}
             }
         }
+        TuiView::WorktreeList {
+            worktrees,
+            selected,
+        } => match key {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                browser.view = TuiView::List;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if *selected > 0 {
+                    *selected -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if *selected < worktrees.len().saturating_sub(1) {
+                    *selected += 1;
+                }
+            }
+            KeyCode::Char('o') => {
+                // Open selected worktree in IDE
+                if let Some(wt) = worktrees.get(*selected) {
+                    let ide_cmd = browser.ide_command.as_deref();
+                    match crate::agents::open_in_ide(&wt.path, ide_cmd) {
+                        Ok(_) => {
+                            browser.status_message =
+                                Some(format!("Opened {} in IDE", wt.name));
+                        }
+                        Err(e) => {
+                            browser.status_message = Some(format!("Failed to open IDE: {}", e));
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('p') => {
+                // Create PR for selected worktree
+                if let Some(wt) = worktrees.get(*selected) {
+                    if let Some(issue_num) = wt.issue_number {
+                        let manager = crate::agents::SessionManager::load();
+                        if let Some(session) = manager.get_by_issue(&wt.project, issue_num) {
+                            if session.is_running() {
+                                browser.status_message = Some("Agent is still running".to_string());
+                            } else if session.pr_url.is_some() {
+                                browser.status_message = Some("PR already created".to_string());
+                            } else {
+                                match crate::agents::create_pr(session) {
+                                    Ok(url) => {
+                                        browser.status_message = Some(format!("PR created: {}", url));
+                                    }
+                                    Err(e) => {
+                                        browser.status_message =
+                                            Some(format!("Failed to create PR: {}", e));
+                                    }
+                                }
+                            }
+                        } else {
+                            browser.status_message = Some("No session for this worktree".to_string());
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('d') | KeyCode::Delete => {
+                // Delete selected worktree
+                let selected_idx = *selected;
+                if let Some(wt) = worktrees.get(selected_idx).cloned() {
+                    if wt.has_tmux {
+                        browser.status_message = Some("Tmux session still running. Kill it first (K).".to_string());
+                    } else {
+                        let results = crate::agents::prune_worktrees(&[wt.clone()]);
+                        if let Some((name, result)) = results.first() {
+                            match result {
+                                Ok(_) => {
+                                    browser.status_message = Some(format!("Deleted worktree: {}", name));
+                                    // Remove from session manager if exists
+                                    if let Some(issue_num) = wt.issue_number {
+                                        let mut manager = crate::agents::SessionManager::load();
+                                        if let Some(session) = manager.get_by_issue(&wt.project, issue_num) {
+                                            let session_id = session.id.clone();
+                                            manager.remove(&session_id);
+                                            let _ = manager.save();
+                                        }
+                                    }
+                                    // Refresh the worktree list
+                                    let new_worktrees = browser.build_worktree_list();
+                                    if new_worktrees.is_empty() {
+                                        browser.view = TuiView::List;
+                                    } else {
+                                        let new_selected = selected_idx.min(new_worktrees.len().saturating_sub(1));
+                                        browser.view = TuiView::WorktreeList {
+                                            worktrees: new_worktrees,
+                                            selected: new_selected,
+                                        };
+                                    }
+                                }
+                                Err(e) => {
+                                    browser.status_message = Some(format!("Failed to delete: {}", e));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('K') => {
+                // Kill tmux session for selected worktree
+                let selected_idx = *selected;
+                if let Some(wt) = worktrees.get(selected_idx).cloned() {
+                    if let Some(issue_num) = wt.issue_number {
+                        let tmux_name = crate::agents::tmux_session_name(&wt.project, issue_num);
+                        if crate::agents::is_tmux_session_running(&tmux_name) {
+                            let manager = crate::agents::SessionManager::load();
+                            if let Some(session) = manager.get_by_issue(&wt.project, issue_num) {
+                                let _ = crate::agents::kill_agent(&session.id);
+                                browser.status_message = Some(format!("Killed tmux session: {}", tmux_name));
+                                // Refresh the list
+                                let new_worktrees = browser.build_worktree_list();
+                                let new_selected = selected_idx.min(new_worktrees.len().saturating_sub(1));
+                                browser.view = TuiView::WorktreeList {
+                                    worktrees: new_worktrees,
+                                    selected: new_selected,
+                                };
+                            }
+                        } else {
+                            browser.status_message = Some("No tmux session running".to_string());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        },
+        TuiView::ConfirmPrune { orphaned } => match key {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let results = crate::agents::prune_worktrees(orphaned);
+                let success_count = results.iter().filter(|(_, r)| r.is_ok()).count();
+                let fail_count = results.len() - success_count;
+
+                // Also remove sessions for pruned worktrees
+                let mut manager = crate::agents::SessionManager::load();
+                for wt in orphaned.iter() {
+                    if let Some(issue_num) = wt.issue_number {
+                        if let Some(session) = manager.get_by_issue(&wt.project, issue_num) {
+                            let session_id = session.id.clone();
+                            manager.remove(&session_id);
+                        }
+                    }
+                }
+                let _ = manager.save();
+
+                if fail_count > 0 {
+                    browser.status_message = Some(format!(
+                        "Pruned {} worktrees ({} failed)",
+                        success_count, fail_count
+                    ));
+                } else {
+                    browser.status_message = Some(format!("Pruned {} worktrees", success_count));
+                }
+                browser.view = TuiView::List;
+                if let Some(project) = browser.project_name.clone() {
+                    browser.refresh_sessions(&project);
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                browser.view = TuiView::List;
+            }
+            _ => {}
+        },
     }
 }
 

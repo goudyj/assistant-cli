@@ -181,6 +181,22 @@ pub fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
                 browser.status_message.as_deref(),
             );
         }
+        TuiView::WorktreeList {
+            worktrees,
+            selected,
+        } => {
+            if let Some(ref msg) = status_msg {
+                let chunks = Layout::vertical([Constraint::Min(3), Constraint::Length(3)])
+                    .split(f.area());
+                draw_worktree_list(f, chunks[0], worktrees, *selected);
+                draw_status_bar(f, chunks[1], msg);
+            } else {
+                draw_worktree_list(f, f.area(), worktrees, *selected);
+            }
+        }
+        TuiView::ConfirmPrune { orphaned } => {
+            draw_confirm_prune(f, orphaned);
+        }
     }
 }
 
@@ -1179,4 +1195,153 @@ pub fn draw_direct_issue(
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Center);
     f.render_widget(help, chunks[3]);
+}
+
+/// Draw worktree list view
+pub fn draw_worktree_list(
+    f: &mut Frame,
+    area: Rect,
+    worktrees: &[crate::agents::WorktreeInfo],
+    selected: usize,
+) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Worktrees ")
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::vertical([Constraint::Min(3), Constraint::Length(2)]).split(inner);
+
+    let items: Vec<ListItem> = worktrees
+        .iter()
+        .enumerate()
+        .map(|(idx, wt)| {
+            let is_selected = idx == selected;
+
+            // Status indicators
+            let status_icon = if wt.has_tmux {
+                Span::styled("▶ ", Style::default().fg(Color::Yellow))
+            } else if wt.has_session {
+                Span::styled("● ", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("○ ", Style::default().fg(Color::DarkGray))
+            };
+
+            let issue_str = wt
+                .issue_number
+                .map(|n| format!("#{:<5}", n))
+                .unwrap_or_else(|| "     ".to_string());
+
+            let name_style = if is_selected {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else if wt.has_session {
+                Style::default().fg(Color::White)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+
+            let orphan_indicator = if !wt.has_session {
+                Span::styled(" (orphaned)", Style::default().fg(Color::Red))
+            } else {
+                Span::raw("")
+            };
+
+            let line = Line::from(vec![
+                status_icon,
+                Span::styled(
+                    issue_str,
+                    Style::default().fg(if wt.has_session {
+                        Color::Cyan
+                    } else {
+                        Color::DarkGray
+                    }),
+                ),
+                Span::raw(" "),
+                Span::styled(&wt.name, name_style),
+                orphan_indicator,
+            ]);
+
+            let style = if is_selected {
+                Style::default().bg(Color::DarkGray)
+            } else {
+                Style::default()
+            };
+
+            ListItem::new(line).style(style)
+        })
+        .collect();
+
+    let list = List::new(items);
+    f.render_widget(list, chunks[0]);
+
+    // Help bar
+    let help = Paragraph::new("o: open IDE │ p: create PR │ d: delete │ K: kill tmux │ Esc: back")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    f.render_widget(help, chunks[1]);
+}
+
+/// Draw confirmation dialog for pruning orphaned worktrees
+pub fn draw_confirm_prune(f: &mut Frame, orphaned: &[crate::agents::WorktreeInfo]) {
+    let area = f.area();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Confirm Prune ")
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let chunks =
+        Layout::vertical([Constraint::Length(3), Constraint::Min(3), Constraint::Length(2)])
+            .split(inner);
+
+    // Header
+    let header = Paragraph::new(format!(
+        "Delete {} orphaned worktree{}?",
+        orphaned.len(),
+        if orphaned.len() == 1 { "" } else { "s" }
+    ))
+    .style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )
+    .alignment(Alignment::Center);
+    f.render_widget(header, chunks[0]);
+
+    // List of worktrees to delete
+    let items: Vec<ListItem> = orphaned
+        .iter()
+        .map(|wt| {
+            let issue_str = wt
+                .issue_number
+                .map(|n| format!("#{}", n))
+                .unwrap_or_default();
+
+            let line = Line::from(vec![
+                Span::styled("  • ", Style::default().fg(Color::Red)),
+                Span::styled(&wt.name, Style::default().fg(Color::White)),
+                Span::styled(
+                    format!(" ({})", issue_str),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+
+    let list = List::new(items);
+    f.render_widget(list, chunks[1]);
+
+    // Confirmation prompt
+    let prompt = Paragraph::new("Press Y to confirm, N or Esc to cancel")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    f.render_widget(prompt, chunks[2]);
 }

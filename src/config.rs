@@ -35,6 +35,9 @@ pub struct Config {
     pub last_project: Option<String>,
     #[serde(default)]
     pub auto_format_comments: bool,
+    /// IDE command to open worktrees (default: auto-detect code/cursor)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ide_command: Option<String>,
 }
 
 #[derive(Debug)]

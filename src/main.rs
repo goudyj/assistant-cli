@@ -170,6 +170,7 @@ async fn main() {
                 project.labels.clone(),
                 commands,
                 available_projects,
+                config.ide_command.clone(),
             )
             .await
             {
