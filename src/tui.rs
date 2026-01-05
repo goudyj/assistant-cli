@@ -188,6 +188,11 @@ impl IssueBrowser {
         // Rebuild commands
         let mut commands = vec![
             CommandSuggestion {
+                name: "all".to_string(),
+                description: "Show all issues (clear filters)".to_string(),
+                labels: None,
+            },
+            CommandSuggestion {
                 name: "logout".to_string(),
                 description: "Logout from GitHub".to_string(),
                 labels: None,

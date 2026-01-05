@@ -906,6 +906,12 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                     browser.view = TuiView::List;
 
                     match cmd_name.as_str() {
+                        "all" => {
+                            browser.list_labels.clear();
+                            browser.status_message = Some("Loading all issues...".to_string());
+                            browser.reload_issues().await;
+                            browser.status_message = Some("Showing all issues".to_string());
+                        }
                         "logout" => {
                             let _ = auth::delete_token();
                             browser.status_message = Some("Logged out.".to_string());

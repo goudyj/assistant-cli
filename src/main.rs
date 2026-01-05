@@ -113,6 +113,11 @@ async fn main() {
     // 3. Build command suggestions for command palette
     let mut commands: Vec<CommandSuggestion> = vec![
         CommandSuggestion {
+            name: "all".to_string(),
+            description: "Show all issues (clear filters)".to_string(),
+            labels: None,
+        },
+        CommandSuggestion {
             name: "logout".to_string(),
             description: "Logout from GitHub".to_string(),
             labels: None,
