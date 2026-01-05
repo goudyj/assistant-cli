@@ -118,8 +118,8 @@ async fn main() {
             labels: None,
         },
         CommandSuggestion {
-            name: "project".to_string(),
-            description: "Switch project".to_string(),
+            name: "repository".to_string(),
+            description: "Switch repository".to_string(),
             labels: None,
         },
     ];
@@ -133,7 +133,14 @@ async fn main() {
         });
     }
 
-    // 4. Launch TUI directly with issue list
+    // 4. Build available projects list
+    let available_projects: Vec<_> = config
+        .projects
+        .iter()
+        .map(|(name, proj)| (name.clone(), proj.clone()))
+        .collect();
+
+    // 5. Launch TUI directly with issue list
     let github = GitHubConfig::new(project.owner.clone(), project.repo.clone(), token.clone());
     let auto_format = config.auto_format_comments;
     let llm_endpoint = llm::default_endpoint();
@@ -157,6 +164,7 @@ async fn main() {
                 project.local_path.clone(),
                 project.labels.clone(),
                 commands,
+                available_projects,
             )
             .await
             {

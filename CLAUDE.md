@@ -96,16 +96,18 @@ cargo test config::tests            # Module tests
 
 ## CLI Commands
 
+Inside the TUI, press `/` to open the command palette:
+
 ```
-/login              - Authenticate with GitHub (opens browser)
 /logout             - Remove GitHub authentication
-/repository <name>  - Select a project from config
-/repository         - Open interactive project selector
-/repo               - Alias for /repository
-/issue <desc>       - Generate an issue from description
-/ok                 - Create the issue on GitHub
-/help               - Show help
-/quit               - Exit
+/repository         - Open interactive project selector (alias: /repo)
+/<custom>           - Custom filter commands defined in project config (e.g., /bugs)
+```
+
+Startup options:
+```
+--project <name>    - Start with a specific project
+--logout            - Remove GitHub authentication and exit
 ```
 
 ## Code Style

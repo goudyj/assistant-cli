@@ -9,6 +9,7 @@
 //! - `tui_utils`: Utility functions
 
 use crate::clipboard::get_clipboard_content;
+use crate::config::ProjectConfig;
 use crate::github::{GitHubConfig, IssueDetail, IssueSummary};
 use crate::images::extract_image_urls;
 use crate::llm;
@@ -76,6 +77,8 @@ pub struct IssueBrowser {
     pub available_commands: Vec<CommandSuggestion>,
     // Last ESC press time for double-ESC quit
     pub last_esc_press: Option<std::time::Instant>,
+    // Available projects for repository switching
+    pub available_projects: Vec<(String, ProjectConfig)>,
 }
 
 impl IssueBrowser {
@@ -143,6 +146,7 @@ impl IssueBrowser {
             project_labels: Vec::new(),
             available_commands: Vec::new(),
             last_esc_press: None,
+            available_projects: Vec::new(),
         }
     }
 
@@ -161,6 +165,60 @@ impl IssueBrowser {
     /// Set available commands for the command palette
     pub fn set_available_commands(&mut self, commands: Vec<CommandSuggestion>) {
         self.available_commands = commands;
+    }
+
+    /// Set available projects for repository switching
+    pub fn set_available_projects(&mut self, projects: Vec<(String, ProjectConfig)>) {
+        self.available_projects = projects;
+    }
+
+    /// Switch to a different project/repository
+    pub async fn switch_project(&mut self, name: &str, project: &ProjectConfig, token: &str) {
+        // Update GitHub config
+        self.github = GitHubConfig::new(project.owner.clone(), project.repo.clone(), token.to_string());
+
+        // Update project info
+        self.project_name = Some(name.to_string());
+        self.local_path = project.local_path.clone();
+
+        // Update labels
+        self.project_labels = project.labels.clone();
+        self.list_labels.clear();
+
+        // Rebuild commands
+        let mut commands = vec![
+            CommandSuggestion {
+                name: "logout".to_string(),
+                description: "Logout from GitHub".to_string(),
+                labels: None,
+            },
+            CommandSuggestion {
+                name: "repository".to_string(),
+                description: "Switch repository".to_string(),
+                labels: None,
+            },
+        ];
+        for (cmd_name, labels) in &project.list_commands {
+            commands.push(CommandSuggestion {
+                name: cmd_name.clone(),
+                description: format!("Filter: {}", labels.join(", ")),
+                labels: Some(labels.clone()),
+            });
+        }
+        self.available_commands = commands;
+
+        // Refresh sessions for new project
+        self.session_cache.clear();
+        self.refresh_sessions(name);
+
+        // Reload issues for the new project
+        self.reload_issues().await;
+
+        // Save last project to config
+        if let Ok(mut config) = crate::config::load_config() {
+            config.set_last_project(name);
+            let _ = config.save();
+        }
     }
 
     /// Get filtered command suggestions based on input
@@ -430,6 +488,7 @@ pub async fn run_issue_browser(
         None,
         Vec::new(),
         Vec::new(),
+        Vec::new(),
     )
     .await
 }
@@ -449,6 +508,7 @@ pub async fn run_issue_browser_with_pagination(
     local_path: Option<std::path::PathBuf>,
     project_labels: Vec<String>,
     available_commands: Vec<CommandSuggestion>,
+    available_projects: Vec<(String, ProjectConfig)>,
 ) -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -467,12 +527,15 @@ pub async fn run_issue_browser_with_pagination(
         has_next_page,
     );
 
-    if let (Some(name), Some(path)) = (project_name, local_path) {
+    if let (Some(name), Some(path)) = (project_name.clone(), local_path) {
         browser.set_project_info(name, path);
+    } else if let Some(name) = project_name {
+        browser.project_name = Some(name);
     }
 
     browser.set_project_labels(project_labels);
     browser.set_available_commands(available_commands);
+    browser.set_available_projects(available_projects);
 
     // Resume monitoring threads for any running sessions from previous process
     crate::agents::resume_monitoring_for_running_sessions();

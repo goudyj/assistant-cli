@@ -854,10 +854,29 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                 }
             }
             KeyCode::Enter => {
-                let project_name = projects.get(*selected).cloned();
-                browser.view = TuiView::List;
-                if let Some(name) = project_name {
-                    browser.status_message = Some(format!("Selected project: {}", name));
+                if let Some(project_name) = projects.get(*selected).cloned() {
+                    // Find the project config
+                    if let Some((_, project_config)) = browser
+                        .available_projects
+                        .iter()
+                        .find(|(name, _)| name == &project_name)
+                    {
+                        let project_config = project_config.clone();
+                        let token = browser.github_token.clone().unwrap_or_default();
+                        browser.status_message =
+                            Some(format!("Switching to {}...", project_name));
+                        browser.view = TuiView::List;
+                        browser
+                            .switch_project(&project_name, &project_config, &token)
+                            .await;
+                        browser.status_message =
+                            Some(format!("Switched to {}", project_name));
+                    } else {
+                        browser.view = TuiView::List;
+                        browser.status_message = Some("Project not found".to_string());
+                    }
+                } else {
+                    browser.view = TuiView::List;
                 }
             }
             _ => {}
@@ -892,13 +911,29 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                             browser.status_message = Some("Logged out.".to_string());
                             browser.should_quit = true;
                         }
-                        "project" | "repo" => {
-                            browser.status_message =
-                                Some("Use the main app to switch projects.".to_string());
+                        "repository" | "repo" => {
+                            let mut projects: Vec<String> = browser
+                                .available_projects
+                                .iter()
+                                .map(|(name, _)| name.clone())
+                                .collect();
+                            projects.sort();
+                            if projects.is_empty() {
+                                browser.status_message =
+                                    Some("No projects configured.".to_string());
+                            } else {
+                                browser.view = TuiView::ProjectSelect {
+                                    projects,
+                                    selected: 0,
+                                };
+                            }
                         }
                         _ => {
                             if let Some(filter_labels) = labels {
-                                browser.list_labels = filter_labels;
+                                browser.list_labels = filter_labels.clone();
+                                browser.status_message =
+                                    Some(format!("Loading /{} filter...", cmd_name));
+                                browser.reload_issues().await;
                                 browser.status_message =
                                     Some(format!("Filter applied: /{}", cmd_name));
                             }
