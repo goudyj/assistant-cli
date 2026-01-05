@@ -404,7 +404,7 @@ fn build_list_title(browser: &IssueBrowser) -> String {
     }
 
     format!(
-        " {} │ C ai │ N new │ R refresh │ d dispatch │ t tmux │ s search │ / cmd │ q quit ",
+        " {} │ C ai │ N new │ d dispatch │ o ide │ p pr │ l logs │ t/T tmux │ R refresh │ / cmd │ q quit ",
         parts.join(" ")
     )
 }
