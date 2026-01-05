@@ -197,6 +197,9 @@ pub fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
         TuiView::ConfirmPrune { orphaned } => {
             draw_confirm_prune(f, orphaned);
         }
+        TuiView::Help => {
+            draw_help(f);
+        }
     }
 }
 
@@ -404,7 +407,7 @@ fn build_list_title(browser: &IssueBrowser) -> String {
     }
 
     format!(
-        " {} │ C ai │ N new │ d dispatch │ o ide │ p pr │ l logs │ t/T tmux │ R refresh │ / cmd │ q quit ",
+        " {} │ C ai │ N new │ d dispatch │ o ide │ p pr │ t tmux │ R refresh │ / cmd │ ? help │ q quit ",
         parts.join(" ")
     )
 }
@@ -1344,4 +1347,75 @@ pub fn draw_confirm_prune(f: &mut Frame, orphaned: &[crate::agents::WorktreeInfo
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Center);
     f.render_widget(prompt, chunks[2]);
+}
+
+/// Draw help screen with all keyboard shortcuts
+pub fn draw_help(f: &mut Frame) {
+    let area = f.area();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Keyboard Shortcuts │ Esc/q/? to close ")
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let help_text = vec![
+        Line::from(vec![
+            Span::styled("LIST VIEW", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Navigation", Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from("    j/↓       Move down"),
+        Line::from("    k/↑       Move up"),
+        Line::from("    Enter     Open issue details"),
+        Line::from("    s         Search issues"),
+        Line::from("    /         Open command palette"),
+        Line::from("    q         Quit"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Issues", Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from("    C         Create issue with AI"),
+        Line::from("    N         Create issue (direct)"),
+        Line::from("    c         Add comment"),
+        Line::from("    Space     Select/deselect issue"),
+        Line::from("    R         Refresh issues"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Agent / Worktree", Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from("    d         Dispatch agent"),
+        Line::from("    o         Open worktree in IDE"),
+        Line::from("    p         Create PR"),
+        Line::from("    l         View agent logs"),
+        Line::from("    D         View agent diff"),
+        Line::from("    K         Kill running agent"),
+        Line::from("    W         Delete worktree"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Tmux", Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from("    t         Open tmux for issue"),
+        Line::from("    T         Embedded tmux terminal"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("DETAIL VIEW", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from("    o         Open in browser"),
+        Line::from("    c         Add comment"),
+        Line::from("    a         Assign user"),
+        Line::from("    x         Close issue"),
+        Line::from("    X         Reopen issue"),
+        Line::from("    d         Dispatch agent"),
+        Line::from("    i/O       Navigate images"),
+        Line::from("    Esc       Back to list"),
+    ];
+
+    let paragraph = Paragraph::new(help_text).scroll((0, 0));
+    f.render_widget(paragraph, inner);
 }

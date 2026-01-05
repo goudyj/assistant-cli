@@ -74,6 +74,8 @@ pub enum TuiView {
     ConfirmPrune {
         orphaned: Vec<WorktreeInfo>,
     },
+    /// Help screen showing all shortcuts
+    Help,
 }
 
 /// Stages of issue creation

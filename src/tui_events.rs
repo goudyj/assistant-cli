@@ -370,6 +370,15 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                 browser.reload_issues().await;
                 browser.status_message = Some("Refreshed".to_string());
             }
+            KeyCode::Char('?') => {
+                browser.view = TuiView::Help;
+            }
+            _ => {}
+        },
+        TuiView::Help => match key {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
+                browser.view = TuiView::List;
+            }
             _ => {}
         },
         TuiView::Search { input } => {
