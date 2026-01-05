@@ -13,7 +13,6 @@ octocrab = "0.49.3"
 dotenvy = "0.15.7"
 dirs = "6"
 open = "5"
-keyring = { version = "3", features = ["apple-native"] }
 ratatui = "0.30"
 regex = "1"
 image = "0.25"

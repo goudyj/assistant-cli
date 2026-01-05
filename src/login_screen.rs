@@ -20,6 +20,7 @@ use std::io;
 enum LoginState {
     Initial,
     WaitingForAuth { auth: DeviceFlowAuth },
+    SavingToken,
     Error(String),
 }
 
@@ -35,10 +36,13 @@ pub async fn run_login_screen(client_id: &str) -> io::Result<Option<String>> {
     let mut state = LoginState::Initial;
     let mut result: Option<String> = None;
     let mut should_quit = false;
+    let mut poll_status = String::from("Waiting for authorization...");
+    let mut last_poll = std::time::Instant::now() - std::time::Duration::from_secs(10);
+    let mut poll_interval = std::time::Duration::from_secs(5);
 
     while !should_quit {
         terminal.draw(|f| {
-            draw_login_screen(f, &state);
+            draw_login_screen(f, &state, &poll_status);
         })?;
 
         match &state {
@@ -88,32 +92,48 @@ pub async fn run_login_screen(client_id: &str) -> io::Result<Option<String>> {
                             continue;
                         }
 
-                // We need to own the auth to poll it, so we'll try once
-                // This is a bit tricky - we'll use a timeout approach
+                // Only poll GitHub if enough time has passed
+                if last_poll.elapsed() < poll_interval {
+                    continue;
+                }
+                last_poll = std::time::Instant::now();
+
                 let poll_result = tokio::time::timeout(
-                    std::time::Duration::from_millis(500),
-                    check_auth_once(&auth.device_code, &auth.client_id),
+                    std::time::Duration::from_secs(10),
+                    check_auth_once_debug(&auth.device_code, &auth.client_id),
                 )
                 .await;
 
                 match poll_result {
-                    Ok(Ok(Some(token))) => {
-                        if let Err(e) = auth::store_token(&token) {
-                            state = LoginState::Error(format!("Failed to store token: {}", e));
-                        } else {
-                            result = Some(token);
-                            should_quit = true;
-                        }
+                    Ok(Ok((Some(token), _))) => {
+                        result = Some(token);
+                        state = LoginState::SavingToken;
                     }
-                    Ok(Ok(None)) => {
-                        // Still pending, continue waiting
+                    Ok(Ok((None, msg))) => {
+                        if msg.contains("slow_down") {
+                            poll_interval = std::time::Duration::from_secs(10);
+                        }
+                        poll_status = msg;
                     }
                     Ok(Err(e)) => {
                         state = LoginState::Error(format!("Auth failed: {}", e));
                     }
                     Err(_) => {
-                        // Timeout, continue waiting
+                        poll_status = "Timeout, retrying...".to_string();
                     }
+                }
+            }
+            LoginState::SavingToken => {
+                // Save the token to config file
+                if let Some(ref token) = result {
+                    if let Err(e) = auth::store_token(token) {
+                        state = LoginState::Error(format!("Failed to save token: {}", e));
+                        result = None;
+                    } else {
+                        should_quit = true;
+                    }
+                } else {
+                    state = LoginState::Error("Token was lost".to_string());
                 }
             }
             LoginState::Error(_) => {
@@ -141,11 +161,11 @@ pub async fn run_login_screen(client_id: &str) -> io::Result<Option<String>> {
     Ok(result)
 }
 
-/// Check auth status once (helper for polling)
-async fn check_auth_once(
+/// Check auth status once (helper for polling) - returns (token, status_message)
+async fn check_auth_once_debug(
     device_code: &str,
     client_id: &str,
-) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(Option<String>, String), Box<dyn std::error::Error + Send + Sync>> {
     let client = reqwest::Client::new();
 
     let response = client
@@ -165,26 +185,30 @@ async fn check_auth_once(
     struct TokenResponse {
         access_token: Option<String>,
         error: Option<String>,
+        error_description: Option<String>,
     }
 
-    let data: TokenResponse = serde_json::from_str(&response_text)?;
+    let data: TokenResponse = serde_json::from_str(&response_text)
+        .map_err(|e| format!("JSON parse error: {} - Response: {}", e, response_text))?;
 
     if let Some(token) = data.access_token {
-        return Ok(Some(token));
+        return Ok((Some(token), "Token received!".to_string()));
     }
 
     if let Some(error) = data.error {
+        let desc = data.error_description.unwrap_or_default();
         match error.as_str() {
-            "authorization_pending" | "slow_down" => Ok(None),
-            _ => Err(error.into()),
+            "authorization_pending" => Ok((None, format!("Waiting... ({})", error))),
+            "slow_down" => Ok((None, format!("Slowing down... ({})", error))),
+            _ => Err(format!("{}: {}", error, desc).into()),
         }
     } else {
-        Ok(None)
+        Ok((None, format!("Unknown response: {}", response_text)))
     }
 }
 
 /// Draw the login screen
-fn draw_login_screen(f: &mut Frame, state: &LoginState) {
+fn draw_login_screen(f: &mut Frame, state: &LoginState, poll_status: &str) {
     let area = f.area();
 
     let block = Block::default()
@@ -237,11 +261,25 @@ fn draw_login_screen(f: &mut Frame, state: &LoginState) {
                 ),
                 Line::from(""),
                 Line::styled(
-                    "Waiting for authorization...",
+                    poll_status.to_string(),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Line::from(""),
                 Line::styled("Press Esc to cancel.", Style::default().fg(Color::DarkGray)),
+            ]
+        }
+        LoginState::SavingToken => {
+            vec![
+                Line::from(""),
+                Line::styled(
+                    "Authorization received!",
+                    Style::default().fg(Color::Green),
+                ),
+                Line::from(""),
+                Line::styled(
+                    "Saving token...",
+                    Style::default().fg(Color::Yellow),
+                ),
             ]
         }
         LoginState::Error(msg) => {

@@ -1,9 +1,8 @@
-use keyring::Entry;
+use crate::config::load_config;
 use reqwest::Client;
 use serde::Deserialize;
 use std::time::Duration;
 
-const SERVICE_NAME: &str = "assistant-cli";
 const GITHUB_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const GITHUB_ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 
@@ -145,32 +144,28 @@ impl DeviceFlowAuth {
 }
 
 pub fn get_stored_token() -> Result<String, AuthError> {
-    let entry = Entry::new(SERVICE_NAME, "github_token")
-        .map_err(|e| AuthError::KeyringError(e.to_string()))?;
+    let config = load_config().map_err(|e| AuthError::KeyringError(e.to_string()))?;
 
-    entry
-        .get_password()
-        .map_err(|e| AuthError::KeyringError(e.to_string()))
+    config
+        .github_token
+        .ok_or_else(|| AuthError::KeyringError("No token stored".to_string()))
 }
 
 pub fn store_token(token: &str) -> Result<(), AuthError> {
-    let entry = Entry::new(SERVICE_NAME, "github_token")
-        .map_err(|e| AuthError::KeyringError(e.to_string()))?;
+    let mut config = load_config().map_err(|e| AuthError::KeyringError(e.to_string()))?;
 
-    // Delete existing entry if present (ignore errors)
-    let _ = entry.delete_credential();
-
-    entry
-        .set_password(token)
+    config.set_token(token);
+    config
+        .save()
         .map_err(|e| AuthError::KeyringError(e.to_string()))
 }
 
 pub fn delete_token() -> Result<(), AuthError> {
-    let entry = Entry::new(SERVICE_NAME, "github_token")
-        .map_err(|e| AuthError::KeyringError(e.to_string()))?;
+    let mut config = load_config().map_err(|e| AuthError::KeyringError(e.to_string()))?;
 
-    entry
-        .delete_credential()
+    config.clear_token();
+    config
+        .save()
         .map_err(|e| AuthError::KeyringError(e.to_string()))
 }
 

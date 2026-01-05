@@ -28,6 +28,8 @@ impl ProjectConfig {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     pub github_client_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github_token: Option<String>,
     pub projects: HashMap<String, ProjectConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_project: Option<String>,
@@ -100,6 +102,14 @@ impl Config {
 
         fs::write(&path, content)?;
         Ok(())
+    }
+
+    pub fn set_token(&mut self, token: &str) {
+        self.github_token = Some(token.to_string());
+    }
+
+    pub fn clear_token(&mut self) {
+        self.github_token = None;
     }
 }
 
