@@ -103,8 +103,7 @@ Inside the TUI, press `/` to open the command palette:
 ```
 /logout             - Remove GitHub authentication
 /repository         - Open interactive project selector (alias: /repo)
-/claude             - Use Claude Code for dispatch
-/opencode           - Use Opencode for dispatch
+/agent              - Select dispatch agent (Claude Code or Opencode)
 /worktrees          - Manage worktrees (view, delete, open IDE)
 /prune              - Clean up orphaned worktrees
 /<custom>           - Custom filter commands defined in project config (e.g., /bugs)

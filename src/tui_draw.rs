@@ -144,6 +144,9 @@ pub fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
         TuiView::ProjectSelect { projects, selected } => {
             draw_project_select_inline(f, projects, *selected);
         }
+        TuiView::AgentSelect { selected } => {
+            draw_agent_select(f, *selected, &browser.coding_agent);
+        }
         TuiView::Command {
             input,
             suggestions,
@@ -767,6 +770,57 @@ pub fn draw_project_select_inline(f: &mut Frame, projects: &[String], selected: 
             };
             let prefix = if i == selected { "> " } else { "  " };
             ListItem::new(Line::from(format!("{}{}", prefix, name))).style(style)
+        })
+        .collect();
+
+    let list = List::new(items);
+
+    let chunks = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).split(inner);
+
+    f.render_widget(list, chunks[0]);
+
+    let help = Paragraph::new("↑↓ navigate │ Enter select │ Esc cancel")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    f.render_widget(help, chunks[1]);
+}
+
+/// Draw agent selection screen
+pub fn draw_agent_select(
+    f: &mut Frame,
+    selected: usize,
+    current_agent: &crate::config::CodingAgentType,
+) {
+    let area = f.area();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Select Dispatch Agent ")
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let agents = [
+        ("Claude Code", crate::config::CodingAgentType::Claude),
+        ("Opencode", crate::config::CodingAgentType::Opencode),
+    ];
+
+    let items: Vec<ListItem> = agents
+        .iter()
+        .enumerate()
+        .map(|(i, (name, agent_type))| {
+            let is_current = agent_type == current_agent;
+            let style = if i == selected {
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let prefix = if i == selected { "> " } else { "  " };
+            let suffix = if is_current { " (current)" } else { "" };
+            ListItem::new(Line::from(format!("{}{}{}", prefix, name, suffix))).style(style)
         })
         .collect();
 

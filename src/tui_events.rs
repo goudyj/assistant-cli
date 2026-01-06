@@ -913,6 +913,33 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
             }
             _ => {}
         },
+        TuiView::AgentSelect { selected } => match key {
+            KeyCode::Esc => {
+                browser.view = TuiView::List;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if *selected > 0 {
+                    *selected -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if *selected < 1 {
+                    *selected += 1;
+                }
+            }
+            KeyCode::Enter => {
+                let new_agent = if *selected == 0 {
+                    crate::config::CodingAgentType::Claude
+                } else {
+                    crate::config::CodingAgentType::Opencode
+                };
+                let agent_name = crate::agents::get_agent(&new_agent).name();
+                browser.coding_agent = new_agent;
+                browser.view = TuiView::List;
+                browser.status_message = Some(format!("Dispatch agent set to {}.", agent_name));
+            }
+            _ => {}
+        },
         TuiView::Command {
             input,
             suggestions,
@@ -986,15 +1013,8 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                                 browser.view = TuiView::ConfirmPrune { orphaned };
                             }
                         }
-                        "claude" => {
-                            browser.coding_agent = crate::config::CodingAgentType::Claude;
-                            browser.status_message =
-                                Some("Dispatch agent set to Claude Code.".to_string());
-                        }
-                        "opencode" => {
-                            browser.coding_agent = crate::config::CodingAgentType::Opencode;
-                            browser.status_message =
-                                Some("Dispatch agent set to Opencode.".to_string());
+                        "agent" => {
+                            browser.view = TuiView::AgentSelect { selected: 0 };
                         }
                         _ => {
                             if let Some(filter_labels) = labels {

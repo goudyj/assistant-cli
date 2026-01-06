@@ -41,6 +41,10 @@ pub enum TuiView {
         projects: Vec<String>,
         selected: usize,
     },
+    /// Agent selection screen (claude/opencode)
+    AgentSelect {
+        selected: usize,
+    },
     /// Command palette for custom commands
     Command {
         input: String,

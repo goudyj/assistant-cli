@@ -138,13 +138,8 @@ async fn main() {
             labels: None,
         },
         CommandSuggestion {
-            name: "claude".to_string(),
-            description: "Use Claude Code for dispatch".to_string(),
-            labels: None,
-        },
-        CommandSuggestion {
-            name: "opencode".to_string(),
-            description: "Use Opencode for dispatch".to_string(),
+            name: "agent".to_string(),
+            description: "Select dispatch agent (Claude Code or Opencode)".to_string(),
             labels: None,
         },
     ];
