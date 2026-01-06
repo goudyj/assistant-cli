@@ -98,10 +98,10 @@ pub async fn dispatch_to_claude(
     dispatch_to_agent(issue, local_path, project, &CodingAgentType::Claude).await
 }
 
-/// Build the prompt for Claude Code from an issue.
+/// Build the prompt for the coding agent from an issue.
 fn build_prompt(issue: &IssueDetail) -> String {
     let mut prompt = format!(
-        "Fix GitHub issue #{}: {}\n\n",
+        "Implement GitHub issue #{}: {}\n\n",
         issue.number, issue.title
     );
 
@@ -458,7 +458,7 @@ mod tests {
         };
 
         let prompt = build_prompt(&issue);
-        assert!(prompt.contains("Fix GitHub issue #123"));
+        assert!(prompt.contains("Implement GitHub issue #123"));
         assert!(prompt.contains("Fix the bug"));
         assert!(prompt.contains("This is the description"));
     }
@@ -477,7 +477,7 @@ mod tests {
         };
 
         let prompt = build_prompt(&issue);
-        assert!(prompt.contains("Fix GitHub issue #456"));
+        assert!(prompt.contains("Implement GitHub issue #456"));
         assert!(prompt.contains("Another issue"));
     }
 
@@ -495,7 +495,7 @@ mod tests {
         };
 
         let prompt = build_prompt(&issue);
-        assert!(prompt.contains("Fix GitHub issue #789"));
+        assert!(prompt.contains("Implement GitHub issue #789"));
         assert!(prompt.contains("\"quotes\""));
         assert!(prompt.contains("`backticks`"));
         assert!(prompt.contains("<>&"));
