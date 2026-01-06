@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use super::traits::CodingAgent;
 use super::{
-    agents_log_dir, create_worktree, get_diff_stats, new_session_id, send_notification,
-    AgentError, AgentSession, AgentStats, AgentStatus, SessionManager,
+    agents_log_dir, build_issue_prompt, create_worktree, get_diff_stats, new_session_id,
+    send_notification, AgentError, AgentSession, AgentStats, AgentStatus, SessionManager,
 };
 use crate::config::CodingAgentType;
 use crate::github::IssueDetail;
@@ -57,7 +57,7 @@ pub async fn dispatch_to_agent(
     let log_file = log_dir.join(format!("{}.log", session_id));
 
     // Build the prompt
-    let prompt = build_prompt(issue);
+    let prompt = build_issue_prompt(issue);
 
     // Get tmux session name
     let tmux_name = tmux_session_name(project, issue.number);
@@ -96,20 +96,6 @@ pub async fn dispatch_to_claude(
     project: &str,
 ) -> Result<AgentSession, AgentError> {
     dispatch_to_agent(issue, local_path, project, &CodingAgentType::Claude).await
-}
-
-/// Build the prompt for the coding agent from an issue.
-fn build_prompt(issue: &IssueDetail) -> String {
-    let mut prompt = format!(
-        "Implement GitHub issue #{}: {}\n\n",
-        issue.number, issue.title
-    );
-
-    if let Some(ref body) = issue.body {
-        prompt.push_str(body);
-    }
-
-    prompt
 }
 
 /// Launch a coding agent in an interactive tmux session.
@@ -445,7 +431,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_prompt_with_body() {
+    fn build_issue_prompt_with_body() {
         let issue = IssueDetail {
             number: 123,
             title: "Fix the bug".to_string(),
@@ -457,14 +443,14 @@ mod tests {
             comments: vec![],
         };
 
-        let prompt = build_prompt(&issue);
+        let prompt = build_issue_prompt(&issue);
         assert!(prompt.contains("Implement GitHub issue #123"));
         assert!(prompt.contains("Fix the bug"));
         assert!(prompt.contains("This is the description"));
     }
 
     #[test]
-    fn build_prompt_without_body() {
+    fn build_issue_prompt_without_body() {
         let issue = IssueDetail {
             number: 456,
             title: "Another issue".to_string(),
@@ -476,13 +462,13 @@ mod tests {
             comments: vec![],
         };
 
-        let prompt = build_prompt(&issue);
+        let prompt = build_issue_prompt(&issue);
         assert!(prompt.contains("Implement GitHub issue #456"));
         assert!(prompt.contains("Another issue"));
     }
 
     #[test]
-    fn build_prompt_with_special_characters() {
+    fn build_issue_prompt_with_special_characters() {
         let issue = IssueDetail {
             number: 789,
             title: "Fix \"quotes\" and `backticks`".to_string(),
@@ -494,7 +480,7 @@ mod tests {
             comments: vec![],
         };
 
-        let prompt = build_prompt(&issue);
+        let prompt = build_issue_prompt(&issue);
         assert!(prompt.contains("Implement GitHub issue #789"));
         assert!(prompt.contains("\"quotes\""));
         assert!(prompt.contains("`backticks`"));

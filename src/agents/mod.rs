@@ -102,3 +102,17 @@ pub fn send_notification(title: &str, message: &str) {
 pub fn send_notification(_title: &str, _message: &str) {
     // No-op on non-macOS platforms
 }
+
+/// Build the prompt for dispatching an issue to a coding agent.
+pub fn build_issue_prompt(issue: &crate::github::IssueDetail) -> String {
+    let mut prompt = format!(
+        "Implement GitHub issue #{}: {}\n\n",
+        issue.number, issue.title
+    );
+
+    if let Some(ref body) = issue.body {
+        prompt.push_str(body);
+    }
+
+    prompt
+}
