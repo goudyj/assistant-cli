@@ -1,5 +1,7 @@
 //! Opencode integration for dispatching issues.
 
+use std::path::Path;
+
 use super::traits::CodingAgent;
 
 /// Opencode agent for processing GitHub issues.
@@ -16,6 +18,16 @@ impl CodingAgent for OpencodeAgent {
 
     fn is_idle(&self, pane_content: &str) -> bool {
         is_opencode_idle(pane_content)
+    }
+
+    fn build_launch_command(&self, worktree_path: &Path, prompt: &str) -> String {
+        // Opencode uses --prompt flag
+        let escaped_prompt = prompt.replace('\'', "'\\''");
+        format!(
+            "cd '{}' && opencode --prompt '{}'",
+            worktree_path.display(),
+            escaped_prompt
+        )
     }
 }
 
