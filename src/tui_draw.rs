@@ -227,7 +227,7 @@ pub fn draw_list_view_in_area(f: &mut Frame, browser: &mut IssueBrowser, area: R
                         AgentStatus::Running => ("▶", Color::Yellow),
                         AgentStatus::Awaiting => ("⏸", Color::Cyan),
                         AgentStatus::Completed { .. } | AgentStatus::Failed { .. } => {
-                            ("⬤", Color::DarkGray)
+                            ("●", Color::Blue)
                         }
                     };
                     let stats = if session.stats.lines_added > 0 || session.stats.lines_deleted > 0
@@ -279,11 +279,11 @@ pub fn draw_list_view_in_area(f: &mut Frame, browser: &mut IssueBrowser, area: R
             } else {
                 let session_span = if let Some(icon) = session_icon {
                     Span::styled(
-                        format!("{}{} ", icon, session_stats),
+                        format!("{}{}  ", icon, session_stats),
                         Style::default().fg(session_color),
                     )
                 } else {
-                    Span::raw("   ")
+                    Span::raw("    ")
                 };
 
                 Line::from(vec![
