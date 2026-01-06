@@ -63,6 +63,7 @@ This is a Rust CLI tool that generates GitHub issues using an LLM (Ollama with M
 ```json
 {
   "github_client_id": "Ov23liXXXXXX",
+  "coding_agent": "claude",
   "projects": {
     "my-project": {
       "owner": "username",
@@ -74,7 +75,8 @@ This is a Rust CLI tool that generates GitHub issues using an LLM (Ollama with M
 }
 ```
 
-Note: `last_project` is automatically managed by the application.
+- `coding_agent`: CLI to use for dispatch (`"claude"` or `"opencode"`, default: `"claude"`)
+- `last_project`: Automatically managed by the application
 
 ## Development Commands
 
@@ -101,6 +103,10 @@ Inside the TUI, press `/` to open the command palette:
 ```
 /logout             - Remove GitHub authentication
 /repository         - Open interactive project selector (alias: /repo)
+/claude             - Use Claude Code for dispatch
+/opencode           - Use Opencode for dispatch
+/worktrees          - Manage worktrees (view, delete, open IDE)
+/prune              - Clean up orphaned worktrees
 /<custom>           - Custom filter commands defined in project config (e.g., /bugs)
 ```
 

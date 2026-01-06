@@ -986,6 +986,16 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                                 browser.view = TuiView::ConfirmPrune { orphaned };
                             }
                         }
+                        "claude" => {
+                            browser.coding_agent = crate::config::CodingAgentType::Claude;
+                            browser.status_message =
+                                Some("Dispatch agent set to Claude Code.".to_string());
+                        }
+                        "opencode" => {
+                            browser.coding_agent = crate::config::CodingAgentType::Opencode;
+                            browser.status_message =
+                                Some("Dispatch agent set to Opencode.".to_string());
+                        }
                         _ => {
                             if let Some(filter_labels) = labels {
                                 browser.list_labels = filter_labels.clone();
