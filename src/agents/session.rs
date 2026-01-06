@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use super::{cache_dir, sessions_file};
+use crate::config::CodingAgentType;
 
 /// Status of an agent session
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -57,6 +58,9 @@ pub struct AgentSession {
     pub stats: AgentStats,
     /// URL of the PR if created
     pub pr_url: Option<String>,
+    /// The coding agent type used for this session
+    #[serde(default)]
+    pub agent_type: CodingAgentType,
 }
 
 impl AgentSession {
@@ -71,6 +75,7 @@ impl AgentSession {
         log_file: PathBuf,
         worktree_path: PathBuf,
         branch_name: String,
+        agent_type: CodingAgentType,
     ) -> Self {
         Self {
             id,
@@ -85,6 +90,7 @@ impl AgentSession {
             branch_name,
             stats: AgentStats::default(),
             pr_url: None,
+            agent_type,
         }
     }
 
@@ -267,6 +273,7 @@ mod tests {
             PathBuf::from("/tmp/test.log"),
             PathBuf::from("/tmp/worktree"),
             "issue-123".to_string(),
+            CodingAgentType::Claude,
         );
 
         assert!(session.is_running());
@@ -283,6 +290,7 @@ mod tests {
             PathBuf::from("/tmp/test.log"),
             PathBuf::from("/tmp/worktree"),
             "issue-123".to_string(),
+            CodingAgentType::Claude,
         );
 
         session.status = AgentStatus::Completed { exit_code: 0 };
@@ -302,6 +310,7 @@ mod tests {
             PathBuf::from("/tmp/test.log"),
             PathBuf::from("/tmp/worktree"),
             "issue-123".to_string(),
+            CodingAgentType::Claude,
         );
 
         manager.add(session);
@@ -323,6 +332,7 @@ mod tests {
             PathBuf::from("/tmp/test.log"),
             PathBuf::from("/tmp/worktree"),
             "issue-123".to_string(),
+            CodingAgentType::Claude,
         );
 
         manager.add(session);
@@ -342,6 +352,7 @@ mod tests {
             PathBuf::from("/tmp/test.log"),
             PathBuf::from("/tmp/worktree"),
             "issue-123".to_string(),
+            CodingAgentType::Claude,
         );
 
         // Just check it doesn't panic
@@ -359,6 +370,7 @@ mod tests {
             PathBuf::from("/tmp/test.log"),
             PathBuf::from("/tmp/worktree"),
             "issue-123".to_string(),
+            CodingAgentType::Claude,
         );
 
         // Test JSON round-trip
@@ -385,6 +397,7 @@ mod tests {
             PathBuf::from("/tmp/1.log"),
             PathBuf::from("/tmp/1"),
             "issue-1".to_string(),
+            CodingAgentType::Claude,
         );
 
         let mut completed = AgentSession::new(
@@ -396,6 +409,7 @@ mod tests {
             PathBuf::from("/tmp/2.log"),
             PathBuf::from("/tmp/2"),
             "issue-2".to_string(),
+            CodingAgentType::Claude,
         );
         completed.status = AgentStatus::Completed { exit_code: 0 };
 
@@ -420,6 +434,7 @@ mod tests {
             PathBuf::from("/tmp/test.log"),
             PathBuf::from("/tmp/worktree"),
             "issue-123".to_string(),
+            CodingAgentType::Claude,
         );
 
         manager.add(session);
@@ -451,6 +466,7 @@ mod tests {
             PathBuf::from("/tmp/test.log"),
             PathBuf::from("/tmp/worktree"),
             "issue-123".to_string(),
+            CodingAgentType::Claude,
         );
 
         manager.add(session);
@@ -476,6 +492,7 @@ mod tests {
             PathBuf::from("/tmp/1.log"),
             PathBuf::from("/tmp/1"),
             "issue-1".to_string(),
+            CodingAgentType::Claude,
         );
 
         // Create a recent completed session (should not be removed)
@@ -488,6 +505,7 @@ mod tests {
             PathBuf::from("/tmp/2.log"),
             PathBuf::from("/tmp/2"),
             "issue-2".to_string(),
+            CodingAgentType::Claude,
         );
         recent.status = AgentStatus::Completed { exit_code: 0 };
 

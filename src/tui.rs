@@ -81,6 +81,8 @@ pub struct IssueBrowser {
     pub available_projects: Vec<(String, ProjectConfig)>,
     // IDE command for opening worktrees
     pub ide_command: Option<String>,
+    // Coding agent type for dispatch
+    pub coding_agent: crate::config::CodingAgentType,
 }
 
 impl IssueBrowser {
@@ -150,12 +152,18 @@ impl IssueBrowser {
             last_esc_press: None,
             available_projects: Vec::new(),
             ide_command: None,
+            coding_agent: crate::config::CodingAgentType::default(),
         }
     }
 
     /// Set the IDE command for opening worktrees
     pub fn set_ide_command(&mut self, command: Option<String>) {
         self.ide_command = command;
+    }
+
+    /// Set the coding agent type for dispatch
+    pub fn set_coding_agent(&mut self, agent: crate::config::CodingAgentType) {
+        self.coding_agent = agent;
     }
 
     /// Build worktree list with session status
@@ -536,6 +544,7 @@ pub async fn run_issue_browser(
         Vec::new(),
         Vec::new(),
         None,
+        crate::config::CodingAgentType::default(),
     )
     .await
 }
@@ -557,6 +566,7 @@ pub async fn run_issue_browser_with_pagination(
     available_commands: Vec<CommandSuggestion>,
     available_projects: Vec<(String, ProjectConfig)>,
     ide_command: Option<String>,
+    coding_agent: crate::config::CodingAgentType,
 ) -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -585,6 +595,7 @@ pub async fn run_issue_browser_with_pagination(
     browser.set_available_commands(available_commands);
     browser.set_available_projects(available_projects);
     browser.set_ide_command(ide_command);
+    browser.set_coding_agent(coding_agent);
 
     // Resume monitoring threads for any running sessions from previous process
     crate::agents::resume_monitoring_for_running_sessions();

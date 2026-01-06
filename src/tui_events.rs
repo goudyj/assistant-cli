@@ -97,12 +97,13 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                                 issue_number
                             ));
                         } else if let Ok(detail) = browser.github.get_issue(issue_number).await {
-                            match crate::agents::dispatch_to_claude(&detail, &local_path, &project_name)
+                            let agent = crate::agents::get_agent(&browser.coding_agent);
+                            match crate::agents::dispatch_to_agent(&detail, &local_path, &project_name, &browser.coding_agent)
                                 .await
                             {
                                 Ok(_) => {
                                     browser.status_message =
-                                        Some(format!("Dispatched #{} to Claude Code.", issue_number));
+                                        Some(format!("Dispatched #{} to {}.", issue_number, agent.name()));
                                 }
                                 Err(e) => {
                                     browser.status_message = Some(format!("Failed to dispatch: {}", e));
@@ -119,6 +120,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                     let mut dispatched = 0;
                     let mut skipped = 0;
 
+                    let agent = crate::agents::get_agent(&browser.coding_agent);
                     for issue_number in browser.selected_issues.iter() {
                         let tmux_name =
                             crate::agents::tmux_session_name(&project_name, *issue_number);
@@ -127,7 +129,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                             continue;
                         }
                         if let Ok(detail) = browser.github.get_issue(*issue_number).await
-                            && crate::agents::dispatch_to_claude(&detail, &local_path, &project_name)
+                            && crate::agents::dispatch_to_agent(&detail, &local_path, &project_name, &browser.coding_agent)
                                 .await
                                 .is_ok()
                         {
@@ -142,7 +144,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                         ));
                     } else {
                         browser.status_message =
-                            Some(format!("Dispatched {} issues to Claude Code.", dispatched));
+                            Some(format!("Dispatched {} issues to {}.", dispatched, agent.name()));
                     }
                     browser.selected_issues.clear();
                     if let Some(project) = browser.project_name.clone() {
@@ -746,11 +748,13 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                             number
                         ));
                     } else {
-                        match crate::agents::dispatch_to_claude(issue, local_path, project).await {
+                        let agent = crate::agents::get_agent(&browser.coding_agent);
+                        match crate::agents::dispatch_to_agent(issue, local_path, project, &browser.coding_agent).await {
                             Ok(session) => {
                                 browser.status_message = Some(format!(
-                                    "Dispatched #{} to Claude Code (session {})",
+                                    "Dispatched #{} to {} (session {})",
                                     number,
+                                    agent.name(),
                                     &session.id[..8]
                                 ));
                             }

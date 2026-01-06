@@ -1,14 +1,19 @@
 //! Agent management for dispatching issues to Claude Code and other agents.
 
 mod claude;
+mod opencode;
 mod session;
+mod traits;
 mod worktree;
 
 pub use claude::{
-    attach_tmux_command, create_pr, dispatch_to_claude, is_tmux_session_running, kill_agent,
-    list_tmux_sessions, resume_monitoring_for_running_sessions, tmux_session_name,
+    attach_tmux_command, create_pr, dispatch_to_agent, dispatch_to_claude, is_tmux_session_running,
+    kill_agent, list_tmux_sessions, resume_monitoring_for_running_sessions, tmux_session_name,
+    ClaudeCodeAgent,
 };
+pub use opencode::OpencodeAgent;
 pub use session::{AgentSession, AgentStats, AgentStatus, SessionManager};
+pub use traits::{get_agent, CodingAgent};
 pub use worktree::{
     create_worktree, get_diff_stats, list_orphaned_worktrees, list_worktrees, open_in_ide,
     prune_worktrees, remove_worktree, WorktreeError, WorktreeInfo,

@@ -3,6 +3,15 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+/// Available coding agents for issue dispatch
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum CodingAgentType {
+    #[default]
+    Claude,
+    Opencode,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
     pub owner: String,
@@ -38,6 +47,9 @@ pub struct Config {
     /// IDE command to open worktrees (default: auto-detect code/cursor)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ide_command: Option<String>,
+    /// Preferred coding agent for dispatch (claude or opencode)
+    #[serde(default)]
+    pub coding_agent: CodingAgentType,
 }
 
 #[derive(Debug)]
@@ -214,5 +226,43 @@ mod tests {
 
         let project = config.get_project("test").unwrap();
         assert!(project.list_commands.is_empty());
+    }
+
+    #[test]
+    fn deserialize_config_with_coding_agent() {
+        let json = r#"{
+            "coding_agent": "opencode",
+            "projects": {
+                "test": { "owner": "a", "repo": "r", "labels": [] }
+            }
+        }"#;
+
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.coding_agent, CodingAgentType::Opencode);
+    }
+
+    #[test]
+    fn backward_compatible_without_coding_agent() {
+        let json = r#"{
+            "projects": {
+                "test": { "owner": "a", "repo": "r", "labels": [] }
+            }
+        }"#;
+
+        let config: Config = serde_json::from_str(json).unwrap();
+        // Default should be Claude
+        assert_eq!(config.coding_agent, CodingAgentType::Claude);
+    }
+
+    #[test]
+    fn coding_agent_type_serialization() {
+        assert_eq!(
+            serde_json::to_string(&CodingAgentType::Claude).unwrap(),
+            "\"claude\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CodingAgentType::Opencode).unwrap(),
+            "\"opencode\""
+        );
     }
 }

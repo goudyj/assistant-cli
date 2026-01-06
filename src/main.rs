@@ -181,6 +181,7 @@ async fn main() {
                 commands,
                 available_projects,
                 config.ide_command.clone(),
+                config.coding_agent.clone(),
             )
             .await
             {

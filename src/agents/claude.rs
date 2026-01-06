@@ -6,21 +6,44 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
+use super::traits::CodingAgent;
 use super::{
     agents_log_dir, create_worktree, get_diff_stats, new_session_id, send_notification,
     AgentError, AgentSession, AgentStats, AgentStatus, SessionManager,
 };
+use crate::config::CodingAgentType;
 use crate::github::IssueDetail;
 
-/// Dispatch an issue to Claude Code for processing.
+/// Claude Code agent for processing GitHub issues.
+pub struct ClaudeCodeAgent;
+
+impl CodingAgent for ClaudeCodeAgent {
+    fn name(&self) -> &'static str {
+        "Claude Code"
+    }
+
+    fn cli_command(&self) -> &'static str {
+        "claude"
+    }
+
+    fn is_idle(&self, pane_content: &str) -> bool {
+        is_claude_idle(pane_content)
+    }
+}
+
+/// Dispatch an issue to a coding agent for processing.
 ///
-/// This creates a git worktree, launches Claude Code in an interactive
+/// This creates a git worktree, launches the agent in an interactive
 /// tmux session, and returns immediately with a session handle.
-pub async fn dispatch_to_claude(
+pub async fn dispatch_to_agent(
     issue: &IssueDetail,
     local_path: &Path,
     project: &str,
+    agent_type: &CodingAgentType,
 ) -> Result<AgentSession, AgentError> {
+    use super::traits::get_agent;
+
+    let agent = get_agent(agent_type);
     let session_id = new_session_id();
 
     // Create the worktree
@@ -30,7 +53,7 @@ pub async fn dispatch_to_claude(
     let log_dir = agents_log_dir();
     fs::create_dir_all(&log_dir)?;
 
-    // Create log file (for session metadata, not claude output anymore)
+    // Create log file (for session metadata)
     let log_file = log_dir.join(format!("{}.log", session_id));
 
     // Build the prompt
@@ -39,10 +62,10 @@ pub async fn dispatch_to_claude(
     // Get tmux session name
     let tmux_name = tmux_session_name(project, issue.number);
 
-    // Launch Claude Code in tmux
-    launch_claude_tmux(&worktree_path, &prompt, &tmux_name)?;
+    // Launch agent in tmux using trait method
+    launch_agent_tmux(&*agent, &worktree_path, &prompt, &tmux_name)?;
 
-    // Create session (pid is 0 since we use tmux now)
+    // Create session with agent type
     let session = AgentSession::new(
         session_id.clone(),
         issue.number,
@@ -52,6 +75,7 @@ pub async fn dispatch_to_claude(
         log_file.clone(),
         worktree_path.clone(),
         branch_name,
+        agent_type.clone(),
     );
 
     // Save session
@@ -59,10 +83,19 @@ pub async fn dispatch_to_claude(
     manager.add(session.clone());
     manager.save()?;
 
-    // Start monitoring thread for tmux session
-    start_tmux_monitoring(session_id, tmux_name, worktree_path);
+    // Start monitoring thread for tmux session with agent type
+    start_tmux_monitoring(session_id, tmux_name, worktree_path, agent_type.clone());
 
     Ok(session)
+}
+
+/// Dispatch an issue to Claude Code (backward compatibility wrapper).
+pub async fn dispatch_to_claude(
+    issue: &IssueDetail,
+    local_path: &Path,
+    project: &str,
+) -> Result<AgentSession, AgentError> {
+    dispatch_to_agent(issue, local_path, project, &CodingAgentType::Claude).await
 }
 
 /// Build the prompt for Claude Code from an issue.
@@ -79,17 +112,15 @@ fn build_prompt(issue: &IssueDetail) -> String {
     prompt
 }
 
-/// Launch Claude Code in an interactive tmux session.
-fn launch_claude_tmux(
+/// Launch a coding agent in an interactive tmux session.
+fn launch_agent_tmux(
+    agent: &dyn CodingAgent,
     worktree_path: &Path,
     prompt: &str,
     session_name: &str,
 ) -> Result<(), AgentError> {
-    // Escape single quotes in prompt for shell
-    let escaped_prompt = prompt.replace('\'', "'\\''");
-
-    // Build the claude command with the initial prompt
-    let claude_cmd = format!("cd '{}' && claude '{}'", worktree_path.display(), escaped_prompt);
+    // Build the command using the agent's trait method
+    let cmd = agent.build_launch_command(worktree_path, prompt);
 
     // Create tmux session in detached mode
     let status = Command::new("tmux")
@@ -104,7 +135,7 @@ fn launch_claude_tmux(
             "50",
             "bash",
             "-c",
-            &claude_cmd,
+            &cmd,
         ])
         .status()
         .map_err(|e| AgentError::ProcessError(format!("Failed to launch tmux: {}", e)))?;
@@ -232,8 +263,12 @@ fn start_tmux_monitoring_with_state(
     tmux_name: String,
     worktree_path: std::path::PathBuf,
     already_awaiting: bool,
+    agent_type: CodingAgentType,
 ) {
+    use super::traits::get_agent;
+
     thread::spawn(move || {
+        let agent = get_agent(&agent_type);
         let mut was_idle = already_awaiting;
         let mut idle_notified = already_awaiting;
 
@@ -267,9 +302,9 @@ fn start_tmux_monitoring_with_state(
                 manager.update_status(&session_id, new_status);
                 let _ = manager.save();
 
-                // Send notification
+                // Send notification using agent name
                 if let Some(session) = manager.get(&session_id) {
-                    let title = "Claude Code";
+                    let title = agent.name();
                     let message = format!("Session ended for issue #{}", session.issue_number);
                     send_notification(title, &message);
                 }
@@ -277,12 +312,12 @@ fn start_tmux_monitoring_with_state(
                 break;
             }
 
-            // Check if Claude is idle (waiting for user input)
+            // Check if agent is idle (waiting for user input)
             if let Some(pane_content) = capture_tmux_pane(&tmux_name) {
-                let is_idle = is_claude_idle(&pane_content);
+                let is_idle = agent.is_idle(&pane_content);
 
                 if is_idle && !was_idle {
-                    // Claude just became idle - update status to Awaiting
+                    // Agent just became idle - update status to Awaiting
                     let mut manager = SessionManager::load();
                     manager.update_status(&session_id, AgentStatus::Awaiting);
                     let _ = manager.save();
@@ -290,7 +325,7 @@ fn start_tmux_monitoring_with_state(
                     // Send notification only once
                     if !idle_notified {
                         if let Some(session) = manager.get(&session_id) {
-                            let title = "Claude Code";
+                            let title = agent.name();
                             let message = format!(
                                 "Awaiting input for issue #{} (+{} -{})",
                                 session.issue_number,
@@ -302,7 +337,7 @@ fn start_tmux_monitoring_with_state(
                         idle_notified = true;
                     }
                 } else if !is_idle && was_idle {
-                    // Claude started working again - update status to Running
+                    // Agent started working again - update status to Running
                     let mut manager = SessionManager::load();
                     manager.update_status(&session_id, AgentStatus::Running);
                     let _ = manager.save();
@@ -321,8 +356,9 @@ fn start_tmux_monitoring(
     session_id: String,
     tmux_name: String,
     worktree_path: std::path::PathBuf,
+    agent_type: CodingAgentType,
 ) {
-    start_tmux_monitoring_with_state(session_id, tmux_name, worktree_path, false);
+    start_tmux_monitoring_with_state(session_id, tmux_name, worktree_path, false, agent_type);
 }
 
 /// Resume monitoring threads for all running sessions.
@@ -344,6 +380,7 @@ pub fn resume_monitoring_for_running_sessions() {
                 tmux_name,
                 session.worktree_path.clone(),
                 already_awaiting,
+                session.agent_type.clone(),
             );
         }
     }
