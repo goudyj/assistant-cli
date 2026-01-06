@@ -444,7 +444,7 @@ mod tests {
         };
 
         let prompt = build_issue_prompt(&issue);
-        assert!(prompt.contains("Implement GitHub issue #123"));
+        assert!(prompt.contains("Read and implement GitHub issue #123"));
         assert!(prompt.contains("Fix the bug"));
         assert!(prompt.contains("This is the description"));
     }
@@ -463,7 +463,7 @@ mod tests {
         };
 
         let prompt = build_issue_prompt(&issue);
-        assert!(prompt.contains("Implement GitHub issue #456"));
+        assert!(prompt.contains("Read and implement GitHub issue #456"));
         assert!(prompt.contains("Another issue"));
     }
 
@@ -481,7 +481,7 @@ mod tests {
         };
 
         let prompt = build_issue_prompt(&issue);
-        assert!(prompt.contains("Implement GitHub issue #789"));
+        assert!(prompt.contains("Read and implement GitHub issue #789"));
         assert!(prompt.contains("\"quotes\""));
         assert!(prompt.contains("`backticks`"));
         assert!(prompt.contains("<>&"));
