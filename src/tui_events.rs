@@ -1328,6 +1328,8 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                                             let _ = manager.save();
                                         }
                                     }
+                                    // Refresh session cache to update issue list indicators
+                                    browser.refresh_sessions(&wt.project);
                                     // Refresh the worktree list
                                     let new_worktrees = browser.build_worktree_list();
                                     if new_worktrees.is_empty() {
@@ -1364,6 +1366,8 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                                 let _ = crate::agents::kill_tmux_session(&tmux_name);
                             }
                             browser.status_message = Some(format!("Killed tmux session: {}", tmux_name));
+                            // Refresh session cache to update issue list indicators
+                            browser.refresh_sessions(&wt.project);
                             // Refresh the list
                             let new_worktrees = browser.build_worktree_list();
                             let new_selected = selected_idx.min(new_worktrees.len().saturating_sub(1));
