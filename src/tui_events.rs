@@ -1357,16 +1357,20 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                         if crate::agents::is_tmux_session_running(&tmux_name) {
                             let manager = crate::agents::SessionManager::load();
                             if let Some(session) = manager.get_by_issue(&wt.project, issue_num) {
+                                // Session exists in manager, use kill_agent to update status
                                 let _ = crate::agents::kill_agent(&session.id);
-                                browser.status_message = Some(format!("Killed tmux session: {}", tmux_name));
-                                // Refresh the list
-                                let new_worktrees = browser.build_worktree_list();
-                                let new_selected = selected_idx.min(new_worktrees.len().saturating_sub(1));
-                                browser.view = TuiView::WorktreeList {
-                                    worktrees: new_worktrees,
-                                    selected: new_selected,
-                                };
+                            } else {
+                                // Orphaned: no session but tmux running, kill directly
+                                let _ = crate::agents::kill_tmux_session(&tmux_name);
                             }
+                            browser.status_message = Some(format!("Killed tmux session: {}", tmux_name));
+                            // Refresh the list
+                            let new_worktrees = browser.build_worktree_list();
+                            let new_selected = selected_idx.min(new_worktrees.len().saturating_sub(1));
+                            browser.view = TuiView::WorktreeList {
+                                worktrees: new_worktrees,
+                                selected: new_selected,
+                            };
                         } else {
                             browser.status_message = Some("No tmux session running".to_string());
                         }
