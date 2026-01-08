@@ -135,6 +135,68 @@ fn launch_agent_tmux(
     Ok(())
 }
 
+/// Launch a coding agent interactively in a tmux session (no prompt).
+///
+/// This is for standalone worktrees where the user wants to start
+/// an agent session without an issue/prompt.
+pub fn launch_agent_interactive(
+    worktree_path: &Path,
+    session_name: &str,
+    agent_type: &CodingAgentType,
+) -> Result<(), AgentError> {
+    use super::traits::get_agent;
+
+    // Verify worktree exists
+    if !worktree_path.exists() {
+        return Err(AgentError::ProcessError(format!(
+            "Worktree path does not exist: {}",
+            worktree_path.display()
+        )));
+    }
+
+    // Check if session already exists
+    if is_tmux_session_running(session_name) {
+        return Err(AgentError::ProcessError(format!(
+            "Tmux session '{}' already exists",
+            session_name
+        )));
+    }
+
+    let agent = get_agent(agent_type);
+
+    // Create tmux session in detached mode, starting in the worktree directory
+    let output = Command::new("tmux")
+        .args([
+            "new-session",
+            "-d",
+            "-s",
+            session_name,
+            "-c",
+            worktree_path.to_str().unwrap_or("."),
+            "-x",
+            "200",
+            "-y",
+            "50",
+        ])
+        .output()
+        .map_err(|e| AgentError::ProcessError(format!("Failed to launch tmux: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(AgentError::ProcessError(format!(
+            "Failed to create tmux session: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    // Send the agent command to the tmux session
+    let agent_cmd = agent.cli_command();
+    let _ = Command::new("tmux")
+        .args(["send-keys", "-t", session_name, agent_cmd, "Enter"])
+        .output();
+
+    Ok(())
+}
+
 /// Get the tmux session name for an issue.
 pub fn tmux_session_name(project: &str, issue_number: u64) -> String {
     format!("{}-issue-{}", project, issue_number)
@@ -150,7 +212,7 @@ pub fn is_tmux_session_running(session_name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// List all tmux sessions for the assistant.
+/// List all tmux sessions for the assistant (issue-based only).
 pub fn list_tmux_sessions() -> Vec<String> {
     let output = Command::new("tmux")
         .args(["list-sessions", "-F", "#{session_name}"])
@@ -161,6 +223,23 @@ pub fn list_tmux_sessions() -> Vec<String> {
             String::from_utf8_lossy(&out.stdout)
                 .lines()
                 .filter(|s| s.contains("-issue-"))
+                .map(|s| s.to_string())
+                .collect()
+        }
+        _ => vec![],
+    }
+}
+
+/// List all tmux sessions (no filtering).
+pub fn list_all_tmux_sessions() -> Vec<String> {
+    let output = Command::new("tmux")
+        .args(["list-sessions", "-F", "#{session_name}"])
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
                 .map(|s| s.to_string())
                 .collect()
         }

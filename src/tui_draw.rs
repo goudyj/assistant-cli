@@ -1,5 +1,7 @@
 //! TUI rendering functions.
 
+use std::path::Path;
+
 use crate::github::IssueDetail;
 use crate::issues::IssueContent;
 use crate::markdown::{parse_markdown_content, render_markdown_line};
@@ -138,6 +140,7 @@ pub fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
         TuiView::EmbeddedTmux {
             available_sessions,
             current_index,
+            ..
         } => {
             draw_embedded_tmux(f, browser, available_sessions, *current_index);
         }
@@ -199,6 +202,15 @@ pub fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
         }
         TuiView::ConfirmPrune { orphaned } => {
             draw_confirm_prune(f, orphaned);
+        }
+        TuiView::CreateWorktree { input } => {
+            draw_create_worktree(f, input);
+        }
+        TuiView::PostWorktreeCreate {
+            worktree_path,
+            branch_name,
+        } => {
+            draw_post_worktree_create(f, worktree_path, branch_name);
         }
         TuiView::Help => {
             draw_help(f);
@@ -1214,6 +1226,20 @@ pub fn draw_worktree_list(
 
     let chunks = Layout::vertical([Constraint::Min(3), Constraint::Length(2)]).split(inner);
 
+    // Handle empty list
+    if worktrees.is_empty() {
+        let empty_msg = Paragraph::new("No worktrees. Press 'n' to create one.")
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center);
+        f.render_widget(empty_msg, chunks[0]);
+
+        let help = Paragraph::new("n: new │ Esc: back")
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center);
+        f.render_widget(help, chunks[1]);
+        return;
+    }
+
     let items: Vec<ListItem> = worktrees
         .iter()
         .enumerate()
@@ -1245,7 +1271,7 @@ pub fn draw_worktree_list(
             };
 
             let orphan_indicator = if !wt.has_session {
-                Span::styled(" (orphaned)", Style::default().fg(Color::Red))
+                Span::styled(" (no agent)", Style::default().fg(Color::DarkGray))
             } else {
                 Span::raw("")
             };
@@ -1279,7 +1305,7 @@ pub fn draw_worktree_list(
     f.render_widget(list, chunks[0]);
 
     // Help bar
-    let help = Paragraph::new("o: open IDE │ p: create PR │ d: delete │ K: kill tmux │ Esc: back")
+    let help = Paragraph::new("n: new │ t: tmux │ o: IDE │ p: PR │ d: delete │ K: kill │ Esc: back")
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Center);
     f.render_widget(help, chunks[1]);
@@ -1344,6 +1370,116 @@ pub fn draw_confirm_prune(f: &mut Frame, orphaned: &[crate::agents::WorktreeInfo
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Center);
     f.render_widget(prompt, chunks[2]);
+}
+
+/// Draw create worktree input screen
+pub fn draw_create_worktree(f: &mut Frame, input: &str) {
+    let area = f.area();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Create Worktree ")
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(3),
+        Constraint::Min(1),
+        Constraint::Length(2),
+    ])
+    .split(inner);
+
+    let prompt = Paragraph::new("Enter branch name:")
+        .style(Style::default().fg(Color::White));
+    f.render_widget(prompt, chunks[0]);
+
+    let input_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+    let (input_text, input_style) = if input.is_empty() {
+        (
+            "e.g., feature/dark-mode".to_string(),
+            Style::default().fg(Color::DarkGray),
+        )
+    } else {
+        (
+            format!("{}_", input),
+            Style::default().fg(Color::White),
+        )
+    };
+    let input_para = Paragraph::new(input_text)
+        .block(input_block)
+        .style(input_style);
+    f.render_widget(input_para, chunks[1]);
+
+    let help = Paragraph::new("Enter: create │ Esc: cancel")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    f.render_widget(help, chunks[3]);
+}
+
+/// Draw post worktree creation choice screen
+pub fn draw_post_worktree_create(f: &mut Frame, worktree_path: &Path, branch_name: &str) {
+    let area = f.area();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Worktree Created ")
+        .border_style(Style::default().fg(Color::Green));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::vertical([
+        Constraint::Length(4),
+        Constraint::Length(5),
+        Constraint::Min(1),
+        Constraint::Length(2),
+    ])
+    .split(inner);
+
+    // Success message
+    let success = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("Branch: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(branch_name, Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Path: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                worktree_path.display().to_string(),
+                Style::default().fg(Color::White),
+            ),
+        ]),
+    ]);
+    f.render_widget(success, chunks[0]);
+
+    // Options
+    let options = Paragraph::new(vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  o  ", Style::default().fg(Color::Yellow)),
+            Span::raw("Open in IDE"),
+        ]),
+        Line::from(vec![
+            Span::styled("  a  ", Style::default().fg(Color::Yellow)),
+            Span::raw("Start agent"),
+        ]),
+        Line::from(vec![
+            Span::styled(" Esc ", Style::default().fg(Color::Yellow)),
+            Span::raw("Back to worktree list"),
+        ]),
+    ]);
+    f.render_widget(options, chunks[1]);
+
+    let help = Paragraph::new("What would you like to do?")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    f.render_widget(help, chunks[3]);
 }
 
 /// Draw help screen with all keyboard shortcuts
@@ -1411,6 +1547,18 @@ pub fn draw_help(f: &mut Frame) {
         Line::from("    X         Reopen issue"),
         Line::from("    d         Dispatch agent"),
         Line::from("    i/O       Navigate images"),
+        Line::from("    Esc       Back to list"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("WORKTREE LIST", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from("    n         Create new worktree"),
+        Line::from("    t         Open tmux session"),
+        Line::from("    o         Open in IDE"),
+        Line::from("    p         Create PR"),
+        Line::from("    d         Delete worktree"),
+        Line::from("    K         Kill tmux session"),
         Line::from("    Esc       Back to list"),
     ];
 

@@ -175,6 +175,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                                     browser.view = TuiView::EmbeddedTmux {
                                         available_sessions: all_sessions,
                                         current_index: current_idx,
+                                        return_to_worktrees: false,
                                     };
                                 }
                                 Err(e) => {
@@ -205,6 +206,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                             browser.view = TuiView::EmbeddedTmux {
                                 available_sessions: all_sessions,
                                 current_index: 0,
+                                return_to_worktrees: false,
                             };
                         }
                         Err(e) => {
@@ -825,6 +827,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
         TuiView::EmbeddedTmux {
             available_sessions,
             current_index,
+            return_to_worktrees,
         } => {
             match key {
                 KeyCode::Esc => {
@@ -833,8 +836,16 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                         && last_press.elapsed() < std::time::Duration::from_millis(500)
                     {
                         browser.embedded_term = None;
-                        browser.view = TuiView::List;
                         browser.last_esc_press = None;
+                        if *return_to_worktrees {
+                            let worktrees = browser.build_worktree_list();
+                            browser.view = TuiView::WorktreeList {
+                                worktrees,
+                                selected: 0,
+                            };
+                        } else {
+                            browser.view = TuiView::List;
+                        }
                         if let Some(project) = browser.project_name.clone() {
                             browser.refresh_sessions_with_fresh_stats(&project);
                         }
@@ -1007,14 +1018,10 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                         }
                         "worktrees" => {
                             let worktrees = browser.build_worktree_list();
-                            if worktrees.is_empty() {
-                                browser.status_message = Some("No worktrees found.".to_string());
-                            } else {
-                                browser.view = TuiView::WorktreeList {
-                                    worktrees,
-                                    selected: 0,
-                                };
-                            }
+                            browser.view = TuiView::WorktreeList {
+                                worktrees,
+                                selected: 0,
+                            };
                         }
                         "prune" => {
                             let orphaned = browser.get_orphaned_worktrees();
@@ -1390,6 +1397,203 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                         } else {
                             browser.status_message = Some("No tmux session running".to_string());
                         }
+                    }
+                }
+            }
+            KeyCode::Char('n') => {
+                // Create new worktree
+                if browser.local_path.is_none() {
+                    browser.status_message =
+                        Some("No local_path configured for this project.".to_string());
+                } else {
+                    browser.view = TuiView::CreateWorktree {
+                        input: String::new(),
+                    };
+                }
+            }
+            KeyCode::Char('t') => {
+                // Open tmux session for selected worktree
+                if let Some(wt) = worktrees.get(*selected) {
+                    // Determine tmux session name based on worktree type
+                    let session_name = if let Some(issue_num) = wt.issue_number {
+                        crate::agents::tmux_session_name(&wt.project, issue_num)
+                    } else {
+                        // Standalone worktree: session name matches worktree name
+                        wt.name.clone()
+                    };
+
+                    if crate::agents::is_tmux_session_running(&session_name) {
+                        let all_sessions = crate::agents::list_all_tmux_sessions();
+                        let current_index = all_sessions
+                            .iter()
+                            .position(|s| s == &session_name)
+                            .unwrap_or(0);
+                        // Create embedded terminal to attach to tmux session
+                        let area = crossterm::terminal::size().unwrap_or((80, 24));
+                        match crate::embedded_term::EmbeddedTerminal::new(
+                            &session_name,
+                            area.1.saturating_sub(1),
+                            area.0,
+                        ) {
+                            Ok(term) => {
+                                browser.embedded_term = Some(term);
+                                browser.view = TuiView::EmbeddedTmux {
+                                    available_sessions: all_sessions,
+                                    current_index,
+                                    return_to_worktrees: true,
+                                };
+                            }
+                            Err(e) => {
+                                browser.status_message =
+                                    Some(format!("Failed to open terminal: {}", e));
+                            }
+                        }
+                    } else {
+                        browser.status_message = Some("No tmux session running for this worktree".to_string());
+                    }
+                }
+            }
+            _ => {}
+        },
+        TuiView::CreateWorktree { input } => match key {
+            KeyCode::Esc => {
+                // Return to worktree list
+                let worktrees = browser.build_worktree_list();
+                if worktrees.is_empty() {
+                    browser.view = TuiView::List;
+                } else {
+                    browser.view = TuiView::WorktreeList {
+                        worktrees,
+                        selected: 0,
+                    };
+                }
+            }
+            KeyCode::Enter => {
+                if !input.is_empty() {
+                    let branch_name = input.clone();
+                    if let Some(local_path) = &browser.local_path {
+                        let project_name = browser.project_name.clone().unwrap_or_default();
+
+                        match crate::agents::create_worktree_with_branch(
+                            local_path,
+                            &project_name,
+                            &branch_name,
+                        ) {
+                            Ok((worktree_path, branch)) => {
+                                browser.view = TuiView::PostWorktreeCreate {
+                                    worktree_path,
+                                    branch_name: branch,
+                                };
+                            }
+                            Err(e) => {
+                                browser.status_message = Some(format!("Failed: {}", e));
+                                let worktrees = browser.build_worktree_list();
+                                browser.view = TuiView::WorktreeList {
+                                    worktrees,
+                                    selected: 0,
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                input.pop();
+            }
+            KeyCode::Char(c) => {
+                input.push(c);
+            }
+            _ => {}
+        },
+        TuiView::PostWorktreeCreate {
+            worktree_path,
+            branch_name,
+        } => match key {
+            KeyCode::Esc => {
+                // Return to worktree list
+                if let Some(project) = browser.project_name.clone() {
+                    browser.refresh_sessions(&project);
+                }
+                let worktrees = browser.build_worktree_list();
+                browser.view = TuiView::WorktreeList {
+                    worktrees,
+                    selected: 0,
+                };
+            }
+            KeyCode::Char('o') => {
+                // Open in IDE
+                let ide_cmd = browser.ide_command.as_deref();
+                match crate::agents::open_in_ide(worktree_path, ide_cmd) {
+                    Ok(_) => {
+                        browser.status_message = Some(format!("Opened {} in IDE", branch_name));
+                    }
+                    Err(e) => {
+                        browser.status_message = Some(format!("Failed to open IDE: {}", e));
+                    }
+                }
+                let worktrees = browser.build_worktree_list();
+                browser.view = TuiView::WorktreeList {
+                    worktrees,
+                    selected: 0,
+                };
+            }
+            KeyCode::Char('a') => {
+                // Start agent interactively
+                let project_name = browser.project_name.clone().unwrap_or_default();
+                let sanitized_branch = branch_name.replace('/', "-");
+                let session_name = format!("{}-{}", project_name, sanitized_branch);
+
+                match crate::agents::launch_agent_interactive(
+                    worktree_path,
+                    &session_name,
+                    &browser.coding_agent,
+                ) {
+                    Ok(_) => {
+                        // Enter the tmux session directly
+                        let sessions = crate::agents::list_tmux_sessions();
+                        let mut all_sessions = sessions;
+                        // Add our new session if not already in the list
+                        if !all_sessions.contains(&session_name) {
+                            all_sessions.push(session_name.clone());
+                        }
+                        let current_index = all_sessions
+                            .iter()
+                            .position(|s| s == &session_name)
+                            .unwrap_or(0);
+                        // Create embedded terminal to attach to tmux session
+                        let area = crossterm::terminal::size().unwrap_or((80, 24));
+                        match crate::embedded_term::EmbeddedTerminal::new(
+                            &session_name,
+                            area.1.saturating_sub(1),
+                            area.0,
+                        ) {
+                            Ok(term) => {
+                                browser.embedded_term = Some(term);
+                                browser.view = TuiView::EmbeddedTmux {
+                                    available_sessions: all_sessions,
+                                    current_index,
+                                    return_to_worktrees: true,
+                                };
+                            }
+                            Err(e) => {
+                                browser.status_message =
+                                    Some(format!("Failed to open terminal: {}", e));
+                                let worktrees = browser.build_worktree_list();
+                                browser.view = TuiView::WorktreeList {
+                                    worktrees,
+                                    selected: 0,
+                                };
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        browser.status_message =
+                            Some(format!("Failed: {} (path: {})", e, worktree_path.display()));
+                        let worktrees = browser.build_worktree_list();
+                        browser.view = TuiView::WorktreeList {
+                            worktrees,
+                            selected: 0,
+                        };
                     }
                 }
             }

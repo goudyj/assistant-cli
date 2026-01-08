@@ -139,6 +139,116 @@ pub fn create_worktree(
     Ok((worktree_path, branch_name))
 }
 
+/// Create a git worktree with a custom branch name.
+///
+/// This creates an isolated working directory with a user-specified branch.
+///
+/// # Arguments
+/// * `local_path` - Path to the main repository
+/// * `project` - Project name
+/// * `branch_name` - Custom branch name (e.g., "feature/dark-mode")
+///
+/// # Returns
+/// * The path to the created worktree and the branch name
+pub fn create_worktree_with_branch(
+    local_path: &Path,
+    project: &str,
+    branch_name: &str,
+) -> Result<(PathBuf, String), WorktreeError> {
+    // Verify local_path exists
+    if !local_path.exists() {
+        return Err(WorktreeError::GitError(format!(
+            "Path does not exist: {}",
+            local_path.display()
+        )));
+    }
+
+    // Verify it's a git repository
+    let is_git_repo = Command::new("git")
+        .current_dir(local_path)
+        .args(["rev-parse", "--git-dir"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !is_git_repo {
+        return Err(WorktreeError::GitError(format!(
+            "Not a git repository: {}. Run 'git init' or clone a repo.",
+            local_path.display()
+        )));
+    }
+
+    // Verify there's at least one commit
+    let has_commits = Command::new("git")
+        .current_dir(local_path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !has_commits {
+        return Err(WorktreeError::GitError(
+            "Repository has no commits. Create at least one commit first.".to_string(),
+        ));
+    }
+
+    // Sanitize branch name for directory (replace / with -)
+    let sanitized_name = branch_name.replace('/', "-");
+    let worktree_name = format!("{}-{}", project, sanitized_name);
+    let worktree_path = worktrees_dir().join(&worktree_name);
+
+    // Ensure worktrees directory exists
+    std::fs::create_dir_all(worktrees_dir())?;
+
+    // Check if worktree already exists
+    if worktree_path.exists() {
+        return Ok((worktree_path, branch_name.to_string()));
+    }
+
+    // Check if branch already exists
+    let branch_exists = Command::new("git")
+        .current_dir(local_path)
+        .args(["rev-parse", "--verify", branch_name])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !branch_exists {
+        // Create branch from HEAD
+        let output = Command::new("git")
+            .current_dir(local_path)
+            .args(["branch", branch_name, "HEAD"])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(WorktreeError::GitError(format!(
+                "Failed to create branch: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+    }
+
+    // Create the worktree
+    let output = Command::new("git")
+        .current_dir(local_path)
+        .args([
+            "worktree",
+            "add",
+            worktree_path.to_str().unwrap(),
+            branch_name,
+        ])
+        .output()?;
+
+    if !output.status.success() {
+        return Err(WorktreeError::GitError(format!(
+            "Failed to create worktree: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    Ok((worktree_path, branch_name.to_string()))
+}
+
 /// Remove a git worktree.
 ///
 /// # Arguments

@@ -1,5 +1,7 @@
 //! TUI type definitions.
 
+use std::path::PathBuf;
+
 use crate::agents::WorktreeInfo;
 use crate::github::IssueDetail;
 use crate::issues::IssueContent;
@@ -35,6 +37,8 @@ pub enum TuiView {
         available_sessions: Vec<String>,
         /// Current session index
         current_index: usize,
+        /// Return to worktree list instead of issue list
+        return_to_worktrees: bool,
     },
     /// Project selection screen
     ProjectSelect {
@@ -77,6 +81,15 @@ pub enum TuiView {
     /// Confirm prune of orphaned worktrees
     ConfirmPrune {
         orphaned: Vec<WorktreeInfo>,
+    },
+    /// Create new worktree with custom branch
+    CreateWorktree {
+        input: String,
+    },
+    /// Post worktree creation choice
+    PostWorktreeCreate {
+        worktree_path: PathBuf,
+        branch_name: String,
     },
     /// Help screen showing all shortcuts
     Help,
