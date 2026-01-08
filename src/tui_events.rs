@@ -828,10 +828,22 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
         } => {
             match key {
                 KeyCode::Esc => {
-                    browser.embedded_term = None;
-                    browser.view = TuiView::List;
-                    if let Some(project) = browser.project_name.clone() {
-                        browser.refresh_sessions_with_fresh_stats(&project);
+                    // Double-ESC to exit embedded terminal, single ESC passes through to tmux
+                    if let Some(last_press) = browser.last_esc_press
+                        && last_press.elapsed() < std::time::Duration::from_millis(500)
+                    {
+                        browser.embedded_term = None;
+                        browser.view = TuiView::List;
+                        browser.last_esc_press = None;
+                        if let Some(project) = browser.project_name.clone() {
+                            browser.refresh_sessions_with_fresh_stats(&project);
+                        }
+                        return;
+                    }
+                    browser.last_esc_press = Some(std::time::Instant::now());
+                    // Pass ESC to the terminal
+                    if let Some(ref term) = browser.embedded_term {
+                        term.send_input(&[0x1b]); // ESC byte
                     }
                 }
                 KeyCode::Left => {

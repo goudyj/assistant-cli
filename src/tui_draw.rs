@@ -688,11 +688,11 @@ pub fn draw_embedded_tmux(
     let area = f.area();
 
     let header_text = if available_sessions.is_empty() {
-        " No tmux session │ ESC to exit ".to_string()
+        " No tmux session │ ESC ESC to exit ".to_string()
     } else {
         let session_name = &available_sessions[current_index];
         format!(
-            " {} │ ←→ switch ({}/{}) │ ESC exit ",
+            " {} │ ←→ switch ({}/{}) │ ESC ESC exit ",
             session_name,
             current_index + 1,
             available_sessions.len()
@@ -1398,6 +1398,7 @@ pub fn draw_help(f: &mut Frame) {
         ]),
         Line::from("    t         Open tmux for issue"),
         Line::from("    T         Embedded tmux terminal"),
+        Line::from("    ESC ESC   Exit embedded terminal"),
         Line::from(""),
         Line::from(vec![
             Span::styled("DETAIL VIEW", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
