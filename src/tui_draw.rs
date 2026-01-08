@@ -1260,17 +1260,17 @@ pub fn draw_worktree_list(
                 .map(|n| format!("#{:<5}", n))
                 .unwrap_or_else(|| "     ".to_string());
 
+            let has_agent = wt.has_session || wt.has_tmux;
             let name_style = if is_selected {
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD)
-            } else if wt.has_session {
+            } else if has_agent {
                 Style::default().fg(Color::White)
             } else {
                 Style::default().fg(Color::DarkGray)
             };
-
-            let orphan_indicator = if !wt.has_session {
+            let orphan_indicator = if !has_agent {
                 Span::styled(" (no agent)", Style::default().fg(Color::DarkGray))
             } else {
                 Span::raw("")
@@ -1280,7 +1280,7 @@ pub fn draw_worktree_list(
                 status_icon,
                 Span::styled(
                     issue_str,
-                    Style::default().fg(if wt.has_session {
+                    Style::default().fg(if has_agent {
                         Color::Cyan
                     } else {
                         Color::DarkGray

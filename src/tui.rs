@@ -177,6 +177,9 @@ impl IssueBrowser {
             if let Some(issue_num) = wt.issue_number {
                 let tmux_name = crate::agents::tmux_session_name(&wt.project, issue_num);
                 wt.has_tmux = crate::agents::is_tmux_session_running(&tmux_name);
+            } else {
+                // Standalone worktree: session name is the worktree name
+                wt.has_tmux = crate::agents::is_tmux_session_running(&wt.name);
             }
         }
         worktrees
