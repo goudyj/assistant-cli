@@ -629,18 +629,38 @@ pub async fn run_issue_browser_with_pagination(
         if event::poll(std::time::Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && key.code == KeyCode::Char('v')
-                    {
+                    let in_embedded_terminal = matches!(browser.view, TuiView::EmbeddedTmux { .. });
+                    let is_cmd_v = key.code == KeyCode::Char('v')
+                        && key.modifiers.contains(KeyModifiers::SUPER);
+                    let is_ctrl_v = key.code == KeyCode::Char('v')
+                        && key.modifiers.contains(KeyModifiers::CONTROL);
+
+                    if in_embedded_terminal && is_cmd_v {
+                        // CMD+V in terminal: paste clipboard content
+                        if let Ok(content) = get_clipboard_content() {
+                            if let Some(ref term) = browser.embedded_term {
+                                term.send_input(content.as_bytes());
+                            }
+                        }
+                    } else if !in_embedded_terminal && (is_cmd_v || is_ctrl_v) {
+                        // CMD+V or Ctrl+V in normal views: paste to input fields
                         if let Ok(content) = get_clipboard_content() {
                             handle_paste(&mut browser, &content);
                         }
                     } else {
+                        // Everything else (including Ctrl+V in terminal) goes to handler
                         handle_key_event(&mut browser, key.code, key.modifiers).await;
                     }
                 }
                 Event::Paste(content) => {
-                    handle_paste(&mut browser, &content);
+                    if matches!(browser.view, TuiView::EmbeddedTmux { .. }) {
+                        // In embedded terminal: send paste content directly
+                        if let Some(ref term) = browser.embedded_term {
+                            term.send_input(content.as_bytes());
+                        }
+                    } else {
+                        handle_paste(&mut browser, &content);
+                    }
                 }
                 _ => {}
             }

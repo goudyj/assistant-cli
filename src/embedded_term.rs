@@ -166,8 +166,8 @@ impl EmbeddedTerminal {
         use crossterm::event::{KeyCode, KeyModifiers};
 
         // Handle Ctrl+key combinations
-        if modifiers.contains(KeyModifiers::CONTROL)
-            && let KeyCode::Char(c) = key {
+        if modifiers.contains(KeyModifiers::CONTROL) {
+            if let KeyCode::Char(c) = key {
                 // Ctrl+A = 1, Ctrl+B = 2, etc.
                 let ctrl_code = (c.to_ascii_lowercase() as u8).wrapping_sub(b'a').wrapping_add(1);
                 if ctrl_code <= 26 {
@@ -175,6 +175,36 @@ impl EmbeddedTerminal {
                     return;
                 }
             }
+        }
+
+        // Handle Alt+key combinations (ESC prefix)
+        if modifiers.contains(KeyModifiers::ALT) {
+            match key {
+                KeyCode::Backspace => {
+                    // Alt+Backspace: delete word (ESC + DEL)
+                    self.send_input(&[0x1b, 127]);
+                    return;
+                }
+                KeyCode::Char(c) => {
+                    // Alt+char: ESC followed by the character
+                    self.send_input(&[0x1b, c as u8]);
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // Handle Meta (CMD on macOS) combinations
+        if modifiers.contains(KeyModifiers::SUPER) {
+            match key {
+                KeyCode::Backspace => {
+                    // CMD+Backspace: delete entire line (send Ctrl+U)
+                    self.send_input(&[21]); // Ctrl+U = 21
+                    return;
+                }
+                _ => {}
+            }
+        }
 
         // Default: send the key without modifiers
         self.send_key(key);
