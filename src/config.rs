@@ -37,11 +37,13 @@ impl ProjectConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub github_client_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub github_token: Option<String>,
+    #[serde(default)]
     pub projects: HashMap<String, ProjectConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_project: Option<String>,
@@ -90,7 +92,19 @@ pub fn load_config() -> Result<Config, ConfigError> {
     })?;
 
     if !path.exists() {
-        return Err(ConfigError::NotFound(path));
+        // Create default config file
+        let config = Config::default();
+
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let content = serde_json::to_string_pretty(&config)
+            .map_err(|e| ConfigError::InvalidJson(e.to_string()))?;
+        fs::write(&path, content)?;
+
+        return Ok(config);
     }
 
     let content = fs::read_to_string(&path)?;
