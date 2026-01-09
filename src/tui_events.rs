@@ -113,7 +113,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                             ));
                         } else if let Ok(detail) = browser.github.get_issue(issue_number).await {
                             let agent = crate::agents::get_agent(&browser.coding_agent);
-                            match crate::agents::dispatch_to_agent(&detail, &local_path, &project_name, &browser.coding_agent)
+                            match crate::agents::dispatch_to_agent(&detail, &local_path, &project_name, &browser.coding_agent, browser.base_branch.as_deref())
                                 .await
                             {
                                 Ok(_) => {
@@ -144,7 +144,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                             continue;
                         }
                         if let Ok(detail) = browser.github.get_issue(*issue_number).await
-                            && crate::agents::dispatch_to_agent(&detail, &local_path, &project_name, &browser.coding_agent)
+                            && crate::agents::dispatch_to_agent(&detail, &local_path, &project_name, &browser.coding_agent, browser.base_branch.as_deref())
                                 .await
                                 .is_ok()
                         {
@@ -282,7 +282,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                         } else if session.pr_url.is_some() {
                             browser.status_message = Some("PR already created".to_string());
                         } else {
-                            match crate::agents::create_pr(session) {
+                            match crate::agents::create_pr(session, browser.base_branch.as_deref()) {
                                 Ok(url) => {
                                     browser.status_message = Some(format!("PR created: {}", url));
                                 }
@@ -797,7 +797,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                         ));
                     } else {
                         let agent = crate::agents::get_agent(&browser.coding_agent);
-                        match crate::agents::dispatch_to_agent(issue, local_path, project, &browser.coding_agent).await {
+                        match crate::agents::dispatch_to_agent(issue, local_path, project, &browser.coding_agent, browser.base_branch.as_deref()).await {
                             Ok(session) => {
                                 browser.status_message = Some(format!(
                                     "Dispatched #{} to {} (session {})",
@@ -1357,7 +1357,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                             } else if session.pr_url.is_some() {
                                 browser.status_message = Some("PR already created".to_string());
                             } else {
-                                match crate::agents::create_pr(session) {
+                                match crate::agents::create_pr(session, browser.base_branch.as_deref()) {
                                     Ok(url) => {
                                         browser.status_message = Some(format!("PR created: {}", url));
                                     }
@@ -1525,6 +1525,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                             local_path,
                             &project_name,
                             &branch_name,
+                            browser.base_branch.as_deref(),
                         ) {
                             Ok((worktree_path, branch)) => {
                                 browser.view = TuiView::PostWorktreeCreate {

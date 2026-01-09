@@ -182,6 +182,7 @@ async fn main() {
                 has_next_page,
                 Some(project_name.clone()),
                 project.local_path.clone(),
+                project.base_branch.clone(),
                 project.labels.clone(),
                 commands,
                 available_projects,

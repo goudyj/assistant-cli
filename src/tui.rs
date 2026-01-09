@@ -63,6 +63,7 @@ pub struct IssueBrowser {
     // Project info for Claude Code dispatch
     pub project_name: Option<String>,
     pub local_path: Option<std::path::PathBuf>,
+    pub base_branch: Option<String>,
     // Multi-select for batch dispatch
     pub selected_issues: std::collections::HashSet<u64>,
     // Session cache for dispatch status display
@@ -143,6 +144,7 @@ impl IssueBrowser {
             available_assignees: Vec::new(),
             project_name: None,
             local_path: None,
+            base_branch: None,
             selected_issues: std::collections::HashSet::new(),
             session_cache: std::collections::HashMap::new(),
             embedded_term: None,
@@ -193,9 +195,10 @@ impl IssueBrowser {
     }
 
     /// Set project info for Claude Code dispatch
-    pub fn set_project_info(&mut self, name: String, path: std::path::PathBuf) {
+    pub fn set_project_info(&mut self, name: String, path: std::path::PathBuf, base_branch: Option<String>) {
         self.project_name = Some(name.clone());
         self.local_path = Some(path);
+        self.base_branch = base_branch;
         self.refresh_sessions(&name);
     }
 
@@ -222,6 +225,7 @@ impl IssueBrowser {
         // Update project info
         self.project_name = Some(name.to_string());
         self.local_path = project.local_path.clone();
+        self.base_branch = project.base_branch.clone();
 
         // Update labels
         self.project_labels = project.labels.clone();
@@ -518,6 +522,7 @@ pub async fn run_issue_browser(
         false,
         None,
         None,
+        None,
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -540,6 +545,7 @@ pub async fn run_issue_browser_with_pagination(
     has_next_page: bool,
     project_name: Option<String>,
     local_path: Option<std::path::PathBuf>,
+    base_branch: Option<String>,
     project_labels: Vec<String>,
     available_commands: Vec<CommandSuggestion>,
     available_projects: Vec<(String, ProjectConfig)>,
@@ -564,9 +570,10 @@ pub async fn run_issue_browser_with_pagination(
     );
 
     if let (Some(name), Some(path)) = (project_name.clone(), local_path) {
-        browser.set_project_info(name, path);
+        browser.set_project_info(name, path, base_branch);
     } else if let Some(name) = project_name {
         browser.project_name = Some(name);
+        browser.base_branch = base_branch;
     }
 
     browser.set_project_labels(project_labels);

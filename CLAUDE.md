@@ -68,7 +68,9 @@ This is a Rust CLI tool that generates GitHub issues using an LLM (Ollama with M
     "my-project": {
       "owner": "username",
       "repo": "my-repo",
-      "labels": ["bug", "feature", "backend"]
+      "labels": ["bug", "feature", "backend"],
+      "local_path": "/path/to/repo",
+      "base_branch": "develop"
     }
   },
   "last_project": "my-project"
@@ -77,6 +79,8 @@ This is a Rust CLI tool that generates GitHub issues using an LLM (Ollama with M
 
 - `coding_agent`: CLI to use for dispatch (`"claude"` or `"opencode"`, default: `"claude"`)
 - `last_project`: Automatically managed by the application
+- `local_path`: Path to the local git repository for worktree creation
+- `base_branch`: Base branch for new branches (auto-detects main/master/develop if not set)
 
 ## Development Commands
 

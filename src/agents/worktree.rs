@@ -29,6 +29,26 @@ impl From<std::io::Error> for WorktreeError {
     }
 }
 
+/// Detect the default branch for a repository (main, master, or develop).
+fn detect_default_branch(local_path: &Path) -> Option<String> {
+    // Try common default branch names in order of preference
+    for branch in ["main", "master", "develop"] {
+        // Check if origin/<branch> exists
+        let output = Command::new("git")
+            .current_dir(local_path)
+            .args(["rev-parse", "--verify", &format!("origin/{}", branch)])
+            .output()
+            .ok();
+
+        if let Some(output) = output {
+            if output.status.success() {
+                return Some(branch.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Create a git worktree for an issue.
 ///
 /// This creates an isolated working directory for the agent to work in.
@@ -37,6 +57,7 @@ impl From<std::io::Error> for WorktreeError {
 /// * `local_path` - Path to the main repository
 /// * `project` - Project name
 /// * `issue_number` - Issue number
+/// * `base_branch` - Optional base branch (auto-detects main/master if None)
 ///
 /// # Returns
 /// * The path to the created worktree and the branch name
@@ -44,6 +65,7 @@ pub fn create_worktree(
     local_path: &Path,
     project: &str,
     issue_number: u64,
+    base_branch: Option<&str>,
 ) -> Result<(PathBuf, String), WorktreeError> {
     // Verify local_path exists
     if !local_path.exists() {
@@ -82,6 +104,11 @@ pub fn create_worktree(
         ));
     }
 
+    // Detect or use provided base branch
+    let detected_base = base_branch
+        .map(|s| s.to_string())
+        .or_else(|| detect_default_branch(local_path));
+
     let branch_name = format!("issue-{}", issue_number);
     let worktree_name = format!("{}-{}", project, issue_number);
     let worktree_path = worktrees_dir().join(&worktree_name);
@@ -95,6 +122,14 @@ pub fn create_worktree(
         return Ok((worktree_path, branch_name));
     }
 
+    // Fetch the latest from origin before creating the branch
+    if let Some(ref base) = detected_base {
+        let _ = Command::new("git")
+            .current_dir(local_path)
+            .args(["fetch", "origin", base])
+            .output();
+    }
+
     // Check if branch already exists
     let branch_exists = Command::new("git")
         .current_dir(local_path)
@@ -104,10 +139,16 @@ pub fn create_worktree(
         .unwrap_or(false);
 
     if !branch_exists {
-        // Create branch from HEAD
+        // Determine the base ref: prefer origin/<base_branch>, fallback to HEAD
+        let base_ref = detected_base
+            .as_ref()
+            .map(|b| format!("origin/{}", b))
+            .unwrap_or_else(|| "HEAD".to_string());
+
+        // Create branch from base ref
         let output = Command::new("git")
             .current_dir(local_path)
-            .args(["branch", &branch_name, "HEAD"])
+            .args(["branch", &branch_name, &base_ref])
             .output()?;
 
         if !output.status.success() {
@@ -147,6 +188,7 @@ pub fn create_worktree(
 /// * `local_path` - Path to the main repository
 /// * `project` - Project name
 /// * `branch_name` - Custom branch name (e.g., "feature/dark-mode")
+/// * `base_branch` - Optional base branch (auto-detects main/master if None)
 ///
 /// # Returns
 /// * The path to the created worktree and the branch name
@@ -154,6 +196,7 @@ pub fn create_worktree_with_branch(
     local_path: &Path,
     project: &str,
     branch_name: &str,
+    base_branch: Option<&str>,
 ) -> Result<(PathBuf, String), WorktreeError> {
     // Verify local_path exists
     if !local_path.exists() {
@@ -192,6 +235,11 @@ pub fn create_worktree_with_branch(
         ));
     }
 
+    // Detect or use provided base branch
+    let detected_base = base_branch
+        .map(|s| s.to_string())
+        .or_else(|| detect_default_branch(local_path));
+
     // Sanitize branch name for directory (replace / with -)
     let sanitized_name = branch_name.replace('/', "-");
     let worktree_name = format!("{}-{}", project, sanitized_name);
@@ -205,6 +253,14 @@ pub fn create_worktree_with_branch(
         return Ok((worktree_path, branch_name.to_string()));
     }
 
+    // Fetch the latest from origin before creating the branch
+    if let Some(ref base) = detected_base {
+        let _ = Command::new("git")
+            .current_dir(local_path)
+            .args(["fetch", "origin", base])
+            .output();
+    }
+
     // Check if branch already exists
     let branch_exists = Command::new("git")
         .current_dir(local_path)
@@ -214,10 +270,16 @@ pub fn create_worktree_with_branch(
         .unwrap_or(false);
 
     if !branch_exists {
-        // Create branch from HEAD
+        // Determine the base ref: prefer origin/<base_branch>, fallback to HEAD
+        let base_ref = detected_base
+            .as_ref()
+            .map(|b| format!("origin/{}", b))
+            .unwrap_or_else(|| "HEAD".to_string());
+
+        // Create branch from base ref
         let output = Command::new("git")
             .current_dir(local_path)
-            .args(["branch", branch_name, "HEAD"])
+            .args(["branch", branch_name, &base_ref])
             .output()?;
 
         if !output.status.success() {
@@ -357,10 +419,10 @@ pub fn get_diff_stats(worktree_path: &Path) -> (usize, usize, usize) {
     (0, 0, 0)
 }
 
-/// Find the merge-base commit with main or master branch.
+/// Find the merge-base commit with the default branch.
 fn find_merge_base(worktree_path: &Path) -> Option<String> {
-    // Try main first, then master
-    for branch in ["main", "master"] {
+    // Try common default branch names in order of preference
+    for branch in ["main", "master", "develop"] {
         let output = Command::new("git")
             .current_dir(worktree_path)
             .args(["merge-base", "HEAD", branch])
