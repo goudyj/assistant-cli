@@ -314,6 +314,37 @@ impl GitHubConfig {
         Ok(())
     }
 
+    /// Search issues in the repository using GitHub Search API
+    pub async fn search_issues(&self, query: &str) -> Result<Vec<IssueSummary>, GitHubError> {
+        let client = self.get_client()?;
+
+        // Build search query: repo:owner/repo is:issue <user_query>
+        let search_query = format!("repo:{}/{} is:issue {}", self.owner, self.repo, query);
+
+        let page = client
+            .search()
+            .issues_and_pull_requests(&search_query)
+            .per_page(50)
+            .send()
+            .await
+            .map_err(Self::map_api_error)?;
+
+        let issues = page
+            .items
+            .into_iter()
+            .map(|issue| IssueSummary {
+                number: issue.number,
+                title: issue.title,
+                html_url: issue.html_url.to_string(),
+                labels: issue.labels.iter().map(|l| l.name.clone()).collect(),
+                state: format!("{:?}", issue.state),
+                assignees: issue.assignees.iter().map(|u| u.login.clone()).collect(),
+            })
+            .collect();
+
+        Ok(issues)
+    }
+
     fn map_api_error(e: octocrab::Error) -> GitHubError {
         let msg = e.to_string();
         if msg.contains("401") || msg.to_lowercase().contains("unauthorized") {

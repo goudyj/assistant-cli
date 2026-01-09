@@ -41,6 +41,13 @@ pub fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
     // Clone status message to avoid borrow conflicts
     let status_msg = browser.status_message.clone();
 
+    // Extract search input before match to avoid borrow conflicts
+    let search_input = if let TuiView::Search { input } = &browser.view {
+        Some(input.clone())
+    } else {
+        None
+    };
+
     match &browser.view {
         TuiView::List => {
             if let Some(ref msg) = status_msg {
@@ -52,13 +59,13 @@ pub fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
                 draw_list_view(f, browser);
             }
         }
-        TuiView::Search { input } => {
-            let chunks =
-                Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).split(f.area());
-
-            let input_clone = input.clone();
-            draw_list_view_in_area(f, browser, chunks[0]);
-            draw_search_input(f, chunks[1], &input_clone);
+        TuiView::Search { .. } => {
+            // Draw the list behind the popup
+            draw_list_view(f, browser);
+            // Draw centered search popup on top
+            if let Some(input) = &search_input {
+                draw_search_popup(f, input);
+            }
         }
         TuiView::Detail(issue) => {
             if let Some(ref msg) = status_msg {
@@ -370,19 +377,33 @@ fn build_list_title(browser: &IssueBrowser) -> String {
     )
 }
 
-/// Draw search input field
-pub fn draw_search_input(f: &mut Frame, area: Rect, input: &str) {
+/// Draw centered search popup
+pub fn draw_search_popup(f: &mut Frame, input: &str) {
+    let area = f.area();
+
+    // Calculate centered popup area (50 chars wide, 3 lines tall)
+    let popup_width = 50.min(area.width.saturating_sub(4));
+    let popup_height = 3;
+    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    // Clear the background behind the popup
+    let clear = Block::default().style(Style::default().bg(Color::Black));
+    f.render_widget(clear, popup_area);
+
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Search (Enter confirm, Esc cancel) ")
+        .title(" Search GitHub ")
         .border_style(Style::default().fg(Color::Yellow));
 
-    let text = format!("/{}", input);
+    let text = format!("{}_", input);
     let paragraph = Paragraph::new(text)
         .block(block)
         .style(Style::default().fg(Color::White));
 
-    f.render_widget(paragraph, area);
+    f.render_widget(paragraph, popup_area);
 }
 
 /// Draw issue detail view
@@ -1505,7 +1526,7 @@ pub fn draw_help(f: &mut Frame) {
         Line::from("    j/↓       Move down"),
         Line::from("    k/↑       Move up"),
         Line::from("    Enter     Open issue details"),
-        Line::from("    s         Search issues"),
+        Line::from("    s         Search GitHub"),
         Line::from("    /         Open command palette"),
         Line::from("    q         Quit"),
         Line::from(""),

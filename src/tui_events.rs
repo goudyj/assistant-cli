@@ -66,8 +66,23 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                 };
             }
             KeyCode::Char('c') => {
-                browser.clear_search();
-                browser.status_message = Some("Filter cleared".to_string());
+                // Clear search and reload issues from GitHub
+                browser.search_query = None;
+                browser.status_message = Some("Reloading issues...".to_string());
+                if let Ok(issues) = browser
+                    .github
+                    .list_issues(&browser.list_labels, &browser.list_state_filter, 50)
+                    .await
+                {
+                    browser.all_issues = issues.clone();
+                    browser.issues = issues;
+                    browser.list_state.select(if browser.issues.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
+                    browser.status_message = Some("Search cleared".to_string());
+                }
             }
             KeyCode::Char(' ') => {
                 if let Some(issue) = browser.selected_issue() {
@@ -385,29 +400,60 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
             }
             _ => {}
         },
-        TuiView::Search { input } => {
-            match key {
-                KeyCode::Esc => {
-                    browser.view = TuiView::List;
-                }
-                KeyCode::Enter => {
-                    browser.view = TuiView::List;
-                }
-                KeyCode::Backspace => {
-                    input.pop();
-                }
-                KeyCode::Char(c) => {
-                    input.push(c);
-                }
-                _ => {}
+        TuiView::Search { input } => match key {
+            KeyCode::Esc => {
+                browser.view = TuiView::List;
             }
-            if matches!(browser.view, TuiView::Search { .. })
-                && let TuiView::Search { input } = &browser.view
-            {
+            KeyCode::Enter => {
                 let query = input.clone();
-                browser.apply_search_filter(&query);
+                if query.is_empty() {
+                    // Empty query: reload all issues
+                    browser.search_query = None;
+                    browser.status_message = Some("Loading issues...".to_string());
+                    browser.view = TuiView::List;
+                    if let Ok(issues) = browser
+                        .github
+                        .list_issues(&browser.list_labels, &browser.list_state_filter, 50)
+                        .await
+                    {
+                        browser.all_issues = issues.clone();
+                        browser.issues = issues;
+                        browser.list_state.select(Some(0));
+                        browser.status_message = None;
+                    }
+                } else {
+                    // Search GitHub
+                    browser.status_message = Some(format!("Searching '{}'...", query));
+                    browser.view = TuiView::List;
+                    match browser.github.search_issues(&query).await {
+                        Ok(results) => {
+                            browser.search_query = Some(query);
+                            browser.issues = results;
+                            browser.list_state.select(if browser.issues.is_empty() {
+                                None
+                            } else {
+                                Some(0)
+                            });
+                            browser.status_message = Some(format!(
+                                "Found {} issue{}",
+                                browser.issues.len(),
+                                if browser.issues.len() == 1 { "" } else { "s" }
+                            ));
+                        }
+                        Err(e) => {
+                            browser.status_message = Some(format!("Search error: {}", e));
+                        }
+                    }
+                }
             }
-        }
+            KeyCode::Backspace => {
+                input.pop();
+            }
+            KeyCode::Char(c) => {
+                input.push(c);
+            }
+            _ => {}
+        },
         TuiView::Detail(issue) => match key {
             KeyCode::Esc | KeyCode::Char('q') => {
                 browser.view = TuiView::List;

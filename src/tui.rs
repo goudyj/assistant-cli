@@ -424,41 +424,6 @@ impl IssueBrowser {
         self.is_loading = false;
     }
 
-    /// Filter issues based on search query
-    pub fn apply_search_filter(&mut self, query: &str) {
-        if query.is_empty() {
-            self.issues = self.all_issues.clone();
-            self.search_query = None;
-        } else {
-            let query_lower = query.to_lowercase();
-            self.issues = self
-                .all_issues
-                .iter()
-                .filter(|issue| {
-                    issue.title.to_lowercase().contains(&query_lower)
-                        || issue.labels.iter().any(|l| l.to_lowercase().contains(&query_lower))
-                })
-                .cloned()
-                .collect();
-            self.search_query = Some(query.to_string());
-        }
-
-        if !self.issues.is_empty() {
-            self.list_state.select(Some(0));
-        } else {
-            self.list_state.select(None);
-        }
-    }
-
-    /// Clear search filter and restore all issues
-    pub fn clear_search(&mut self) {
-        self.issues = self.all_issues.clone();
-        self.search_query = None;
-        if !self.issues.is_empty() {
-            self.list_state.select(Some(0));
-        }
-    }
-
     /// Load available assignees from GitHub API
     pub async fn load_assignees(&mut self) {
         if self.available_assignees.is_empty()
