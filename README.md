@@ -4,6 +4,26 @@ CLI to generate GitHub issues using an LLM (Ollama/Mistral).
 
 ## Installation
 
+### Quick Install (Recommended)
+
+**macOS / Linux:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/goudyj/assistant-cli/master/scripts/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/goudyj/assistant-cli/master/scripts/install.ps1 | iex
+```
+
+### Install Specific Version
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/goudyj/assistant-cli/master/scripts/install.sh | bash -s v0.1.0
+```
+
+### Build from Source
+
 ```bash
 cargo build --release
 ```
