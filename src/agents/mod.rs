@@ -104,7 +104,10 @@ pub fn send_notification(_title: &str, _message: &str) {
 }
 
 /// Build the prompt for dispatching an issue to a coding agent.
-pub fn build_issue_prompt(issue: &crate::github::IssueDetail) -> String {
+pub fn build_issue_prompt(
+    issue: &crate::github::IssueDetail,
+    additional_instructions: Option<&str>,
+) -> String {
     let mut prompt = format!(
         "Read and implement GitHub issue #{}: {}\n\n",
         issue.number, issue.title
@@ -112,6 +115,13 @@ pub fn build_issue_prompt(issue: &crate::github::IssueDetail) -> String {
 
     if let Some(ref body) = issue.body {
         prompt.push_str(body);
+    }
+
+    if let Some(instructions) = additional_instructions {
+        if !instructions.trim().is_empty() {
+            prompt.push_str("\n\n---\n\nAdditional instructions:\n");
+            prompt.push_str(instructions);
+        }
     }
 
     prompt

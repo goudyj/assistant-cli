@@ -99,10 +99,10 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                     browser.status_message =
                         Some("No local_path configured for this project.".to_string());
                 } else if browser.selected_issues.is_empty() {
+                    // Single issue dispatch - show instructions popup
                     if let Some(issue) = browser.selected_issue() {
                         let issue_number = issue.number;
                         let project_name = browser.project_name.clone().unwrap_or_default();
-                        let local_path = browser.local_path.clone().unwrap();
 
                         let tmux_name =
                             crate::agents::tmux_session_name(&project_name, issue_number);
@@ -112,24 +112,15 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                                 issue_number
                             ));
                         } else if let Ok(detail) = browser.github.get_issue(issue_number).await {
-                            let agent = crate::agents::get_agent(&browser.coding_agent);
-                            match crate::agents::dispatch_to_agent(&detail, &local_path, &project_name, &browser.coding_agent, browser.base_branch.as_deref())
-                                .await
-                            {
-                                Ok(_) => {
-                                    browser.status_message =
-                                        Some(format!("Dispatched #{} to {}.", issue_number, agent.name()));
-                                }
-                                Err(e) => {
-                                    browser.status_message = Some(format!("Failed to dispatch: {}", e));
-                                }
-                            }
-                        }
-                        if let Some(project) = browser.project_name.clone() {
-                            browser.refresh_sessions(&project);
+                            // Open instructions popup instead of dispatching directly
+                            browser.view = TuiView::DispatchInstructions {
+                                issue: detail,
+                                input: String::new(),
+                            };
                         }
                     }
                 } else {
+                    // Batch dispatch - no instructions popup, dispatch directly
                     let project_name = browser.project_name.clone().unwrap_or_default();
                     let local_path = browser.local_path.clone().unwrap();
                     let mut dispatched = 0;
@@ -144,7 +135,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                             continue;
                         }
                         if let Ok(detail) = browser.github.get_issue(*issue_number).await
-                            && crate::agents::dispatch_to_agent(&detail, &local_path, &project_name, &browser.coding_agent, browser.base_branch.as_deref())
+                            && crate::agents::dispatch_to_agent(&detail, &local_path, &project_name, &browser.coding_agent, browser.base_branch.as_deref(), None)
                                 .await
                                 .is_ok()
                         {
@@ -391,6 +382,143 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
             }
             KeyCode::Char('?') => {
                 browser.view = TuiView::Help;
+            }
+            _ => {}
+        },
+        TuiView::DispatchInstructions { issue, input } => match key {
+            KeyCode::Esc => {
+                browser.view = TuiView::List;
+            }
+            KeyCode::Enter if modifiers.contains(KeyModifiers::SHIFT) => {
+                input.push('\n');
+            }
+            KeyCode::Enter => {
+                // Dispatch with instructions (or without if empty)
+                if let Some(local_path) = browser.local_path.clone() {
+                    let project_name = browser.project_name.clone().unwrap_or_default();
+                    let instructions = if input.trim().is_empty() {
+                        None
+                    } else {
+                        Some(input.as_str())
+                    };
+                    let agent = crate::agents::get_agent(&browser.coding_agent);
+                    match crate::agents::dispatch_to_agent(
+                        issue,
+                        &local_path,
+                        &project_name,
+                        &browser.coding_agent,
+                        browser.base_branch.as_deref(),
+                        instructions,
+                    )
+                    .await
+                    {
+                        Ok(_) => {
+                            browser.status_message =
+                                Some(format!("Dispatched #{} to {}.", issue.number, agent.name()));
+                        }
+                        Err(e) => {
+                            browser.status_message = Some(format!("Failed to dispatch: {}", e));
+                        }
+                    }
+                    if let Some(project) = browser.project_name.clone() {
+                        browser.refresh_sessions(&project);
+                    }
+                }
+                browser.view = TuiView::List;
+            }
+            KeyCode::Backspace => {
+                input.pop();
+            }
+            KeyCode::Char(c) => {
+                input.push(c);
+            }
+            _ => {}
+        },
+        TuiView::WorktreeAgentInstructions {
+            worktree_path,
+            branch_name,
+            input,
+        } => match key {
+            KeyCode::Esc => {
+                // Return to PostWorktreeCreate
+                browser.view = TuiView::PostWorktreeCreate {
+                    worktree_path: worktree_path.clone(),
+                    branch_name: branch_name.clone(),
+                };
+            }
+            KeyCode::Enter if modifiers.contains(KeyModifiers::SHIFT) => {
+                input.push('\n');
+            }
+            KeyCode::Enter => {
+                // Start agent with optional prompt
+                let project_name = browser.project_name.clone().unwrap_or_default();
+                let sanitized_branch = branch_name.replace('/', "-");
+                let session_name = format!("{}-{}", project_name, sanitized_branch);
+
+                let initial_prompt = if input.trim().is_empty() {
+                    None
+                } else {
+                    Some(input.as_str())
+                };
+
+                match crate::agents::launch_agent_interactive(
+                    worktree_path,
+                    &session_name,
+                    &browser.coding_agent,
+                    initial_prompt,
+                ) {
+                    Ok(_) => {
+                        // Enter the tmux session directly
+                        let sessions = crate::agents::list_tmux_sessions();
+                        let mut all_sessions = sessions;
+                        if !all_sessions.contains(&session_name) {
+                            all_sessions.push(session_name.clone());
+                        }
+                        let current_index = all_sessions
+                            .iter()
+                            .position(|s| s == &session_name)
+                            .unwrap_or(0);
+                        let area = crossterm::terminal::size().unwrap_or((80, 24));
+                        match crate::embedded_term::EmbeddedTerminal::new(
+                            &session_name,
+                            area.1.saturating_sub(1),
+                            area.0,
+                        ) {
+                            Ok(term) => {
+                                browser.embedded_term = Some(term);
+                                browser.view = TuiView::EmbeddedTmux {
+                                    available_sessions: all_sessions,
+                                    current_index,
+                                    return_to_worktrees: true,
+                                };
+                            }
+                            Err(e) => {
+                                browser.status_message =
+                                    Some(format!("Failed to open terminal: {}", e));
+                                let worktrees = browser.build_worktree_list();
+                                browser.view = TuiView::WorktreeList {
+                                    worktrees,
+                                    selected: 0,
+                                };
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        browser.status_message =
+                            Some(format!("Failed: {} (path: {})", e, worktree_path.display()));
+                        let worktrees = browser.build_worktree_list();
+                        browser.view = TuiView::WorktreeList {
+                            worktrees,
+                            selected: 0,
+                        };
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                input.pop();
+            }
+            KeyCode::Char(c) => {
+                input.push(c);
             }
             _ => {}
         },
@@ -797,7 +925,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                         ));
                     } else {
                         let agent = crate::agents::get_agent(&browser.coding_agent);
-                        match crate::agents::dispatch_to_agent(issue, local_path, project, &browser.coding_agent, browser.base_branch.as_deref()).await {
+                        match crate::agents::dispatch_to_agent(issue, local_path, project, &browser.coding_agent, browser.base_branch.as_deref(), None).await {
                             Ok(session) => {
                                 browser.status_message = Some(format!(
                                     "Dispatched #{} to {} (session {})",
@@ -1586,64 +1714,12 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                 };
             }
             KeyCode::Char('a') => {
-                // Start agent interactively
-                let project_name = browser.project_name.clone().unwrap_or_default();
-                let sanitized_branch = branch_name.replace('/', "-");
-                let session_name = format!("{}-{}", project_name, sanitized_branch);
-
-                match crate::agents::launch_agent_interactive(
-                    worktree_path,
-                    &session_name,
-                    &browser.coding_agent,
-                ) {
-                    Ok(_) => {
-                        // Enter the tmux session directly
-                        let sessions = crate::agents::list_tmux_sessions();
-                        let mut all_sessions = sessions;
-                        // Add our new session if not already in the list
-                        if !all_sessions.contains(&session_name) {
-                            all_sessions.push(session_name.clone());
-                        }
-                        let current_index = all_sessions
-                            .iter()
-                            .position(|s| s == &session_name)
-                            .unwrap_or(0);
-                        // Create embedded terminal to attach to tmux session
-                        let area = crossterm::terminal::size().unwrap_or((80, 24));
-                        match crate::embedded_term::EmbeddedTerminal::new(
-                            &session_name,
-                            area.1.saturating_sub(1),
-                            area.0,
-                        ) {
-                            Ok(term) => {
-                                browser.embedded_term = Some(term);
-                                browser.view = TuiView::EmbeddedTmux {
-                                    available_sessions: all_sessions,
-                                    current_index,
-                                    return_to_worktrees: true,
-                                };
-                            }
-                            Err(e) => {
-                                browser.status_message =
-                                    Some(format!("Failed to open terminal: {}", e));
-                                let worktrees = browser.build_worktree_list();
-                                browser.view = TuiView::WorktreeList {
-                                    worktrees,
-                                    selected: 0,
-                                };
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        browser.status_message =
-                            Some(format!("Failed: {} (path: {})", e, worktree_path.display()));
-                        let worktrees = browser.build_worktree_list();
-                        browser.view = TuiView::WorktreeList {
-                            worktrees,
-                            selected: 0,
-                        };
-                    }
-                }
+                // Show instructions popup before starting agent
+                browser.view = TuiView::WorktreeAgentInstructions {
+                    worktree_path: worktree_path.clone(),
+                    branch_name: branch_name.clone(),
+                    input: String::new(),
+                };
             }
             _ => {}
         },
@@ -1743,6 +1819,12 @@ pub fn handle_paste(browser: &mut IssueBrowser, content: &str) {
         }
         TuiView::AssignUser { input, .. } => {
             input.push_str(&clean_content.replace('\n', " "));
+        }
+        TuiView::DispatchInstructions { input, .. } => {
+            input.push_str(&clean_content);
+        }
+        TuiView::WorktreeAgentInstructions { input, .. } => {
+            input.push_str(&clean_content);
         }
         _ => {}
     }

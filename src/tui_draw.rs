@@ -48,6 +48,25 @@ pub fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
         None
     };
 
+    // Extract dispatch instructions data before match to avoid borrow conflicts
+    let dispatch_instructions_data =
+        if let TuiView::DispatchInstructions { issue, input } = &browser.view {
+            Some((issue.number, input.clone()))
+        } else {
+            None
+        };
+
+    // Extract worktree agent instructions data before match to avoid borrow conflicts
+    let worktree_instructions_data =
+        if let TuiView::WorktreeAgentInstructions {
+            branch_name, input, ..
+        } = &browser.view
+        {
+            Some((branch_name.clone(), input.clone()))
+        } else {
+            None
+        };
+
     match &browser.view {
         TuiView::List => {
             if let Some(ref msg) = status_msg {
@@ -218,6 +237,20 @@ pub fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
             branch_name,
         } => {
             draw_post_worktree_create(f, worktree_path, branch_name);
+        }
+        TuiView::DispatchInstructions { .. } => {
+            // Draw the list behind the popup
+            draw_list_view(f, browser);
+            // Draw centered instructions popup on top
+            if let Some((issue_number, input)) = &dispatch_instructions_data {
+                draw_dispatch_instructions(f, *issue_number, input);
+            }
+        }
+        TuiView::WorktreeAgentInstructions { .. } => {
+            // Draw centered instructions popup
+            if let Some((branch_name, input)) = &worktree_instructions_data {
+                draw_worktree_agent_instructions(f, branch_name, input);
+            }
         }
         TuiView::Help => {
             draw_help(f);
@@ -1585,4 +1618,108 @@ pub fn draw_help(f: &mut Frame) {
 
     let paragraph = Paragraph::new(help_text).scroll((0, 0));
     f.render_widget(paragraph, inner);
+}
+
+/// Draw instructions popup for dispatching an issue
+pub fn draw_dispatch_instructions(f: &mut Frame, issue_number: u64, input: &str) {
+    let area = f.area();
+
+    // Calculate centered popup area (60% width, 10 lines tall)
+    let popup_width = (area.width * 60 / 100).max(40).min(area.width.saturating_sub(4));
+    let popup_height = 10.min(area.height.saturating_sub(4));
+    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    // Clear the background behind the popup
+    let clear = Block::default().style(Style::default().bg(Color::Black));
+    f.render_widget(clear, popup_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Add instructions for #{} ", issue_number))
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let inner = block.inner(popup_area);
+    f.render_widget(block, popup_area);
+
+    // Split inner area: instructions text area + hint
+    let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
+
+    // Display input with cursor
+    let display_text = if input.is_empty() {
+        "Optional: add context for the agent...".to_string()
+    } else {
+        format!("{}_", input)
+    };
+
+    let style = if input.is_empty() {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let paragraph = Paragraph::new(display_text)
+        .style(style)
+        .wrap(Wrap { trim: false });
+    f.render_widget(paragraph, chunks[0]);
+
+    // Draw hint at bottom
+    let hint = Paragraph::new("Shift+Enter: newline │ Enter: dispatch │ Esc: cancel")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    f.render_widget(hint, chunks[1]);
+}
+
+/// Draw instructions popup for starting agent on worktree
+pub fn draw_worktree_agent_instructions(f: &mut Frame, branch_name: &str, input: &str) {
+    let area = f.area();
+
+    // Calculate centered popup area (60% width, 10 lines tall)
+    let popup_width = (area.width * 60 / 100).max(40).min(area.width.saturating_sub(4));
+    let popup_height = 10.min(area.height.saturating_sub(4));
+    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    // Clear the background behind the popup
+    let clear = Block::default().style(Style::default().bg(Color::Black));
+    f.render_widget(clear, popup_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Add instructions for {} ", branch_name))
+        .border_style(Style::default().fg(Color::Green));
+
+    let inner = block.inner(popup_area);
+    f.render_widget(block, popup_area);
+
+    // Split inner area: instructions text area + hint
+    let chunks = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
+
+    // Display input with cursor
+    let display_text = if input.is_empty() {
+        "Optional: add context for the agent...".to_string()
+    } else {
+        format!("{}_", input)
+    };
+
+    let style = if input.is_empty() {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let paragraph = Paragraph::new(display_text)
+        .style(style)
+        .wrap(Wrap { trim: false });
+    f.render_widget(paragraph, chunks[0]);
+
+    // Draw hint at bottom
+    let hint = Paragraph::new("Shift+Enter: newline │ Enter: start agent │ Esc: cancel")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    f.render_widget(hint, chunks[1]);
 }

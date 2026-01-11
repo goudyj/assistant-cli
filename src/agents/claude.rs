@@ -41,6 +41,7 @@ pub async fn dispatch_to_agent(
     project: &str,
     agent_type: &CodingAgentType,
     base_branch: Option<&str>,
+    additional_instructions: Option<&str>,
 ) -> Result<AgentSession, AgentError> {
     use super::traits::get_agent;
 
@@ -57,8 +58,8 @@ pub async fn dispatch_to_agent(
     // Create log file (for session metadata)
     let log_file = log_dir.join(format!("{}.log", session_id));
 
-    // Build the prompt
-    let prompt = build_issue_prompt(issue);
+    // Build the prompt with optional additional instructions
+    let prompt = build_issue_prompt(issue, additional_instructions);
 
     // Get tmux session name
     let tmux_name = tmux_session_name(project, issue.number);
@@ -97,7 +98,7 @@ pub async fn dispatch_to_claude(
     project: &str,
     base_branch: Option<&str>,
 ) -> Result<AgentSession, AgentError> {
-    dispatch_to_agent(issue, local_path, project, &CodingAgentType::Claude, base_branch).await
+    dispatch_to_agent(issue, local_path, project, &CodingAgentType::Claude, base_branch, None).await
 }
 
 /// Launch a coding agent in an interactive tmux session.
@@ -137,14 +138,15 @@ fn launch_agent_tmux(
     Ok(())
 }
 
-/// Launch a coding agent interactively in a tmux session (no prompt).
+/// Launch a coding agent interactively in a tmux session.
 ///
-/// This is for standalone worktrees where the user wants to start
-/// an agent session without an issue/prompt.
+/// If `initial_prompt` is provided, the agent will be launched with that prompt.
+/// Otherwise, it starts in interactive mode without initial context.
 pub fn launch_agent_interactive(
     worktree_path: &Path,
     session_name: &str,
     agent_type: &CodingAgentType,
+    initial_prompt: Option<&str>,
 ) -> Result<(), AgentError> {
     use super::traits::get_agent;
 
@@ -166,35 +168,63 @@ pub fn launch_agent_interactive(
 
     let agent = get_agent(agent_type);
 
-    // Create tmux session in detached mode, starting in the worktree directory
-    let output = Command::new("tmux")
-        .args([
-            "new-session",
-            "-d",
-            "-s",
-            session_name,
-            "-c",
-            worktree_path.to_str().unwrap_or("."),
-            "-x",
-            "200",
-            "-y",
-            "50",
-        ])
-        .output()
-        .map_err(|e| AgentError::ProcessError(format!("Failed to launch tmux: {}", e)))?;
+    // If we have a prompt, use build_launch_command like launch_agent_tmux
+    if let Some(prompt) = initial_prompt {
+        let cmd = agent.build_launch_command(worktree_path, prompt);
 
-    if !output.status.success() {
-        return Err(AgentError::ProcessError(format!(
-            "Failed to create tmux session: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
+        let status = Command::new("tmux")
+            .args([
+                "new-session",
+                "-d",
+                "-s",
+                session_name,
+                "-x",
+                "200",
+                "-y",
+                "50",
+                "bash",
+                "-c",
+                &cmd,
+            ])
+            .status()
+            .map_err(|e| AgentError::ProcessError(format!("Failed to launch tmux: {}", e)))?;
+
+        if !status.success() {
+            return Err(AgentError::ProcessError(
+                "Failed to create tmux session".to_string(),
+            ));
+        }
+    } else {
+        // No prompt - start in interactive mode
+        let output = Command::new("tmux")
+            .args([
+                "new-session",
+                "-d",
+                "-s",
+                session_name,
+                "-c",
+                worktree_path.to_str().unwrap_or("."),
+                "-x",
+                "200",
+                "-y",
+                "50",
+            ])
+            .output()
+            .map_err(|e| AgentError::ProcessError(format!("Failed to launch tmux: {}", e)))?;
+
+        if !output.status.success() {
+            return Err(AgentError::ProcessError(format!(
+                "Failed to create tmux session: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        // Send the agent command to the tmux session
+        let agent_cmd = agent.cli_command();
+        let _ = Command::new("tmux")
+            .args(["send-keys", "-t", session_name, agent_cmd, "Enter"])
+            .output();
     }
-
-    // Send the agent command to the tmux session
-    let agent_cmd = agent.cli_command();
-    let _ = Command::new("tmux")
-        .args(["send-keys", "-t", session_name, agent_cmd, "Enter"])
-        .output();
 
     Ok(())
 }
@@ -533,7 +563,7 @@ mod tests {
             comments: vec![],
         };
 
-        let prompt = build_issue_prompt(&issue);
+        let prompt = build_issue_prompt(&issue, None);
         assert!(prompt.contains("Read and implement GitHub issue #123"));
         assert!(prompt.contains("Fix the bug"));
         assert!(prompt.contains("This is the description"));
@@ -552,7 +582,7 @@ mod tests {
             comments: vec![],
         };
 
-        let prompt = build_issue_prompt(&issue);
+        let prompt = build_issue_prompt(&issue, None);
         assert!(prompt.contains("Read and implement GitHub issue #456"));
         assert!(prompt.contains("Another issue"));
     }
@@ -570,11 +600,50 @@ mod tests {
             comments: vec![],
         };
 
-        let prompt = build_issue_prompt(&issue);
+        let prompt = build_issue_prompt(&issue, None);
         assert!(prompt.contains("Read and implement GitHub issue #789"));
         assert!(prompt.contains("\"quotes\""));
         assert!(prompt.contains("`backticks`"));
         assert!(prompt.contains("<>&"));
+    }
+
+    #[test]
+    fn build_issue_prompt_with_additional_instructions() {
+        let issue = IssueDetail {
+            number: 100,
+            title: "Test issue".to_string(),
+            body: Some("Issue body".to_string()),
+            html_url: "https://github.com/test/test/issues/100".to_string(),
+            labels: vec![],
+            state: "Open".to_string(),
+            assignees: vec![],
+            comments: vec![],
+        };
+
+        let prompt = build_issue_prompt(&issue, Some("Use TDD approach\nWrite tests first"));
+        assert!(prompt.contains("Read and implement GitHub issue #100"));
+        assert!(prompt.contains("Issue body"));
+        assert!(prompt.contains("Additional instructions:"));
+        assert!(prompt.contains("Use TDD approach"));
+        assert!(prompt.contains("Write tests first"));
+    }
+
+    #[test]
+    fn build_issue_prompt_with_empty_instructions() {
+        let issue = IssueDetail {
+            number: 101,
+            title: "Test issue".to_string(),
+            body: Some("Issue body".to_string()),
+            html_url: "https://github.com/test/test/issues/101".to_string(),
+            labels: vec![],
+            state: "Open".to_string(),
+            assignees: vec![],
+            comments: vec![],
+        };
+
+        // Empty/whitespace-only instructions should not be added
+        let prompt = build_issue_prompt(&issue, Some("   "));
+        assert!(!prompt.contains("Additional instructions:"));
     }
 
     #[test]

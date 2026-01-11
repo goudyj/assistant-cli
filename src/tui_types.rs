@@ -91,6 +91,17 @@ pub enum TuiView {
         worktree_path: PathBuf,
         branch_name: String,
     },
+    /// Dispatch issue with optional additional instructions
+    DispatchInstructions {
+        issue: IssueDetail,
+        input: String,
+    },
+    /// Start agent on worktree with optional instructions
+    WorktreeAgentInstructions {
+        worktree_path: PathBuf,
+        branch_name: String,
+        input: String,
+    },
     /// Help screen showing all shortcuts
     Help,
 }
