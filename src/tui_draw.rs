@@ -156,13 +156,6 @@ pub fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
         } => {
             draw_agent_logs(f, session_id, content, *scroll);
         }
-        TuiView::AgentDiff {
-            session_id,
-            content,
-            scroll,
-        } => {
-            draw_agent_diff(f, session_id, content, *scroll);
-        }
         TuiView::EmbeddedTmux {
             available_sessions,
             current_index,
@@ -228,6 +221,9 @@ pub fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
         }
         TuiView::ConfirmPrune { orphaned } => {
             draw_confirm_prune(f, orphaned);
+        }
+        TuiView::ConfirmDeleteWorktree { worktree, .. } => {
+            draw_confirm_delete_worktree(f, worktree);
         }
         TuiView::CreateWorktree { input } => {
             draw_create_worktree(f, input);
@@ -704,41 +700,6 @@ pub fn draw_agent_logs(f: &mut Frame, session_id: &str, content: &str, scroll: u
                 .border_style(Style::default().fg(Color::Yellow)),
         )
         .wrap(Wrap { trim: false })
-        .scroll((scroll, 0));
-
-    f.render_widget(paragraph, f.area());
-}
-
-/// Draw agent diff view
-pub fn draw_agent_diff(f: &mut Frame, session_id: &str, content: &str, scroll: u16) {
-    let lines: Vec<Line> = content
-        .lines()
-        .map(|line| {
-            let style = if line.starts_with('+') && !line.starts_with("+++") {
-                Style::default().fg(Color::Green)
-            } else if line.starts_with('-') && !line.starts_with("---") {
-                Style::default().fg(Color::Red)
-            } else if line.starts_with("@@") {
-                Style::default().fg(Color::Cyan)
-            } else if line.starts_with("diff ") || line.starts_with("index ") {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default()
-            };
-            Line::from(Span::styled(line.to_string(), style))
-        })
-        .collect();
-
-    let title = format!(" Agent {} Diff │ ↑↓ scroll │ q back ", &session_id[..8]);
-
-    let text = Text::from(lines);
-    let paragraph = Paragraph::new(text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(Style::default().fg(Color::Green)),
-        )
         .scroll((scroll, 0));
 
     f.render_widget(paragraph, f.area());
@@ -1426,6 +1387,53 @@ pub fn draw_confirm_prune(f: &mut Frame, orphaned: &[crate::agents::WorktreeInfo
     f.render_widget(prompt, chunks[2]);
 }
 
+/// Draw confirmation dialog for deleting a single worktree
+pub fn draw_confirm_delete_worktree(f: &mut Frame, worktree: &crate::agents::WorktreeInfo) {
+    let area = f.area();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Confirm Delete ")
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let chunks =
+        Layout::vertical([Constraint::Length(3), Constraint::Length(3), Constraint::Length(2)])
+            .split(inner);
+
+    // Header
+    let header = Paragraph::new("Delete this worktree?")
+        .style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .alignment(Alignment::Center);
+    f.render_widget(header, chunks[0]);
+
+    // Worktree info
+    let issue_str = worktree
+        .issue_number
+        .map(|n| format!(" (#{}) ", n))
+        .unwrap_or_else(|| " ".to_string());
+
+    let info = Paragraph::new(Line::from(vec![
+        Span::styled("  • ", Style::default().fg(Color::Red)),
+        Span::styled(&worktree.name, Style::default().fg(Color::White)),
+        Span::styled(issue_str, Style::default().fg(Color::Cyan)),
+    ]))
+    .alignment(Alignment::Center);
+    f.render_widget(info, chunks[1]);
+
+    // Confirmation prompt
+    let prompt = Paragraph::new("Press Y to confirm, N or Esc to cancel")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    f.render_widget(prompt, chunks[2]);
+}
+
 /// Draw create worktree input screen
 pub fn draw_create_worktree(f: &mut Frame, input: &str) {
     let area = f.area();
@@ -1579,7 +1587,6 @@ pub fn draw_help(f: &mut Frame) {
         Line::from("    o         Open worktree in IDE"),
         Line::from("    p         Create PR"),
         Line::from("    l         View agent logs"),
-        Line::from("    D         View agent diff"),
         Line::from("    K         Kill running agent"),
         Line::from("    W         Delete worktree"),
         Line::from(""),

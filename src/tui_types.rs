@@ -27,11 +27,6 @@ pub enum TuiView {
         content: String,
         scroll: u16,
     },
-    AgentDiff {
-        session_id: String,
-        content: String,
-        scroll: u16,
-    },
     EmbeddedTmux {
         /// Available tmux sessions for switching
         available_sessions: Vec<String>,
@@ -81,6 +76,12 @@ pub enum TuiView {
     /// Confirm prune of orphaned worktrees
     ConfirmPrune {
         orphaned: Vec<WorktreeInfo>,
+    },
+    /// Confirm deletion of a single worktree
+    ConfirmDeleteWorktree {
+        worktree: WorktreeInfo,
+        /// Index to return to in the worktree list
+        return_index: usize,
     },
     /// Create new worktree with custom branch
     CreateWorktree {

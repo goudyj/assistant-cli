@@ -239,31 +239,6 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                     }
                 }
             }
-            KeyCode::Char('D') => {
-                if let Some(issue) = browser.selected_issue() {
-                    if let Some(session) = browser.session_cache.get(&issue.number) {
-                        let output = std::process::Command::new("git")
-                            .current_dir(&session.worktree_path)
-                            .args(["diff", "HEAD"])
-                            .output();
-
-                        let content = match output {
-                            Ok(out) if out.status.success() => {
-                                String::from_utf8_lossy(&out.stdout).to_string()
-                            }
-                            _ => "No changes or failed to get diff".to_string(),
-                        };
-
-                        browser.view = TuiView::AgentDiff {
-                            session_id: session.id.clone(),
-                            content,
-                            scroll: 0,
-                        };
-                    } else {
-                        browser.status_message = Some("No agent session for this issue".to_string());
-                    }
-                }
-            }
             KeyCode::Char('p') => {
                 if let Some(issue) = browser.selected_issue() {
                     let issue_number = issue.number;
@@ -980,24 +955,6 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
             }
             _ => {}
         },
-        TuiView::AgentDiff { scroll, .. } => match key {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                browser.view = TuiView::List;
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                *scroll = scroll.saturating_sub(1);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                *scroll += 1;
-            }
-            KeyCode::PageUp => {
-                *scroll = scroll.saturating_sub(20);
-            }
-            KeyCode::PageDown => {
-                *scroll += 20;
-            }
-            _ => {}
-        },
         TuiView::EmbeddedTmux {
             available_sessions,
             current_index,
@@ -1502,45 +1459,16 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                 }
             }
             KeyCode::Char('d') | KeyCode::Delete => {
-                // Delete selected worktree
+                // Show confirmation before deleting
                 let selected_idx = *selected;
                 if let Some(wt) = worktrees.get(selected_idx).cloned() {
                     if wt.has_tmux {
                         browser.status_message = Some("Tmux session still running. Kill it first (K).".to_string());
                     } else {
-                        let results = crate::agents::prune_worktrees(&[wt.clone()]);
-                        if let Some((name, result)) = results.first() {
-                            match result {
-                                Ok(_) => {
-                                    browser.status_message = Some(format!("Deleted worktree: {}", name));
-                                    // Remove from session manager if exists
-                                    if let Some(issue_num) = wt.issue_number {
-                                        let mut manager = crate::agents::SessionManager::load();
-                                        if let Some(session) = manager.get_by_issue(&wt.project, issue_num) {
-                                            let session_id = session.id.clone();
-                                            manager.remove(&session_id);
-                                            let _ = manager.save();
-                                        }
-                                    }
-                                    // Refresh session cache to update issue list indicators
-                                    browser.refresh_sessions(&wt.project);
-                                    // Refresh the worktree list
-                                    let new_worktrees = browser.build_worktree_list();
-                                    if new_worktrees.is_empty() {
-                                        browser.view = TuiView::List;
-                                    } else {
-                                        let new_selected = selected_idx.min(new_worktrees.len().saturating_sub(1));
-                                        browser.view = TuiView::WorktreeList {
-                                            worktrees: new_worktrees,
-                                            selected: new_selected,
-                                        };
-                                    }
-                                }
-                                Err(e) => {
-                                    browser.status_message = Some(format!("Failed to delete: {}", e));
-                                }
-                            }
-                        }
+                        browser.view = TuiView::ConfirmDeleteWorktree {
+                            worktree: wt,
+                            return_index: selected_idx,
+                        };
                     }
                 }
             }
@@ -1548,9 +1476,16 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                 // Kill tmux session for selected worktree
                 let selected_idx = *selected;
                 if let Some(wt) = worktrees.get(selected_idx).cloned() {
-                    if let Some(issue_num) = wt.issue_number {
-                        let tmux_name = crate::agents::tmux_session_name(&wt.project, issue_num);
-                        if crate::agents::is_tmux_session_running(&tmux_name) {
+                    // Determine tmux session name based on worktree type
+                    let tmux_name = if let Some(issue_num) = wt.issue_number {
+                        crate::agents::tmux_session_name(&wt.project, issue_num)
+                    } else {
+                        // Standalone worktree: session name matches worktree name
+                        wt.name.clone()
+                    };
+
+                    if crate::agents::is_tmux_session_running(&tmux_name) {
+                        if let Some(issue_num) = wt.issue_number {
                             let manager = crate::agents::SessionManager::load();
                             if let Some(session) = manager.get_by_issue(&wt.project, issue_num) {
                                 // Session exists in manager, use kill_agent to update status
@@ -1559,19 +1494,22 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                                 // Orphaned: no session but tmux running, kill directly
                                 let _ = crate::agents::kill_tmux_session(&tmux_name);
                             }
-                            browser.status_message = Some(format!("Killed tmux session: {}", tmux_name));
-                            // Refresh session cache to update issue list indicators
-                            browser.refresh_sessions(&wt.project);
-                            // Refresh the list
-                            let new_worktrees = browser.build_worktree_list();
-                            let new_selected = selected_idx.min(new_worktrees.len().saturating_sub(1));
-                            browser.view = TuiView::WorktreeList {
-                                worktrees: new_worktrees,
-                                selected: new_selected,
-                            };
                         } else {
-                            browser.status_message = Some("No tmux session running".to_string());
+                            // Standalone worktree without issue: kill tmux directly
+                            let _ = crate::agents::kill_tmux_session(&tmux_name);
                         }
+                        browser.status_message = Some(format!("Killed tmux session: {}", tmux_name));
+                        // Refresh session cache to update issue list indicators
+                        browser.refresh_sessions(&wt.project);
+                        // Refresh the list
+                        let new_worktrees = browser.build_worktree_list();
+                        let new_selected = selected_idx.min(new_worktrees.len().saturating_sub(1));
+                        browser.view = TuiView::WorktreeList {
+                            worktrees: new_worktrees,
+                            selected: new_selected,
+                        };
+                    } else {
+                        browser.status_message = Some("No tmux session running".to_string());
                     }
                 }
             }
@@ -1756,6 +1694,63 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 browser.view = TuiView::List;
+            }
+            _ => {}
+        },
+        TuiView::ConfirmDeleteWorktree {
+            worktree,
+            return_index,
+        } => match key {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let wt = worktree.clone();
+                let selected_idx = *return_index;
+                let results = crate::agents::prune_worktrees(&[wt.clone()]);
+                if let Some((name, result)) = results.first() {
+                    match result {
+                        Ok(_) => {
+                            browser.status_message = Some(format!("Deleted worktree: {}", name));
+                            // Remove from session manager if exists
+                            if let Some(issue_num) = wt.issue_number {
+                                let mut manager = crate::agents::SessionManager::load();
+                                if let Some(session) = manager.get_by_issue(&wt.project, issue_num) {
+                                    let session_id = session.id.clone();
+                                    manager.remove(&session_id);
+                                    let _ = manager.save();
+                                }
+                            }
+                            // Refresh session cache to update issue list indicators
+                            browser.refresh_sessions(&wt.project);
+                        }
+                        Err(e) => {
+                            browser.status_message = Some(format!("Failed to delete: {}", e));
+                        }
+                    }
+                }
+                // Return to worktree list
+                let new_worktrees = browser.build_worktree_list();
+                if new_worktrees.is_empty() {
+                    browser.view = TuiView::List;
+                } else {
+                    let new_selected = selected_idx.min(new_worktrees.len().saturating_sub(1));
+                    browser.view = TuiView::WorktreeList {
+                        worktrees: new_worktrees,
+                        selected: new_selected,
+                    };
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                // Return to worktree list without deleting
+                let selected_idx = *return_index;
+                let worktrees = browser.build_worktree_list();
+                if worktrees.is_empty() {
+                    browser.view = TuiView::List;
+                } else {
+                    let new_selected = selected_idx.min(worktrees.len().saturating_sub(1));
+                    browser.view = TuiView::WorktreeList {
+                        worktrees,
+                        selected: new_selected,
+                    };
+                }
             }
             _ => {}
         },
