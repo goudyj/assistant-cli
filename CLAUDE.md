@@ -11,10 +11,10 @@ This is a Rust CLI tool that generates GitHub issues using an LLM (Ollama with M
 ### Core Modules
 
 - **`auth`**: GitHub OAuth Device Flow authentication
-  - `DeviceFlowAuth::start(client_id)` initiates device flow
+  - `DeviceFlowAuth::start(client_id, client_secret)` initiates device flow
   - `poll_for_token()` waits for user authorization
-  - Token stored securely in system keyring via `keyring` crate
-  - `get_stored_token()`, `store_token()`, `delete_token()` for keyring operations
+  - Token stored in config file
+  - `get_stored_token()`, `store_token()`, `delete_token()` for token operations
 
 - **`config`**: Configuration management from `~/.config/assistant.json`
   - `Config` struct with `github_client_id`, `projects: HashMap<String, ProjectConfig>`, and `last_project`
@@ -62,7 +62,6 @@ This is a Rust CLI tool that generates GitHub issues using an LLM (Ollama with M
 **File: `~/.config/assistant.json`**
 ```json
 {
-  "github_client_id": "Ov23liXXXXXX",
   "coding_agent": "claude",
   "projects": {
     "my-project": {
@@ -77,6 +76,7 @@ This is a Rust CLI tool that generates GitHub issues using an LLM (Ollama with M
 }
 ```
 
+- `github_client_id`: Optional override for OAuth App Client ID (embedded by default)
 - `coding_agent`: CLI to use for dispatch (`"claude"` or `"opencode"`, default: `"claude"`)
 - `last_project`: Automatically managed by the application
 - `local_path`: Path to the local git repository for worktree creation
@@ -130,4 +130,4 @@ Startup options:
 - Bug issues require: **Context**, **Steps to reproduce**
 - Task issues require: **Context**, **Goal**, **Acceptance criteria**
 - Labels are project-specific, defined in config file
-- Token stored in system keyring (service: `assistant-cli`, key: `github_token`)
+- Token stored in config file (`~/.config/assistant.json`)

@@ -30,25 +30,10 @@ cargo build --release
 
 ## Configuration
 
-### 1. Create a GitHub OAuth App
-
-1. Go to https://github.com/settings/developers
-2. Click "New OAuth App"
-3. Fill in:
-   - **Application name**: `assistant-cli` (or any name)
-   - **Homepage URL**: `https://github.com` (or your repo URL)
-   - **Authorization callback URL**: `https://github.com` (not used for device flow)
-   - **☑️ Enable Device Flow**: **Check this box!**
-4. Click "Register application"
-5. Copy the **Client ID** (format: `Ov23li...`)
-
-### 2. Configuration file
-
-Create `~/.config/assistant.json`:
+Configure your settings in `~/.config/assistant.json`:
 
 ```json
 {
-  "github_client_id": "Ov23liXXXXXXXXXXXXXX",
   "coding_agent": "claude",
   "ide_command": "cursor",
   "projects": {
@@ -71,7 +56,6 @@ Create `~/.config/assistant.json`:
 
 | Field | Description |
 |-------|-------------|
-| `github_client_id` | Client ID from your GitHub OAuth App |
 | `coding_agent` | Agent for dispatch: `"claude"` or `"opencode"` (default: `"claude"`) |
 | `ide_command` | IDE to open worktrees: `"code"`, `"cursor"`, etc. (auto-detected if not set) |
 | `auto_format_comments` | Auto-format issue comments (default: `false`) |
@@ -134,7 +118,7 @@ Waiting for authorization...
 Successfully logged in to GitHub!
 ```
 
-The token is securely stored in the system keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service).
+The token is stored in `~/.config/assistant.json`.
 
 ### Commands
 
@@ -179,7 +163,7 @@ src/
 │   ├── opencode.rs   # Opencode dispatch
 │   ├── worktree.rs   # Git worktree management
 │   └── session.rs    # Agent session tracking
-├── auth.rs           # OAuth Device Flow + keyring
+├── auth.rs           # OAuth Device Flow
 ├── config.rs         # JSON configuration
 ├── github.rs         # GitHub API (octocrab)
 ├── issues.rs         # Issue generation via LLM
