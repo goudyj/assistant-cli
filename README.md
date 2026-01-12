@@ -49,27 +49,57 @@ Create `~/.config/assistant.json`:
 ```json
 {
   "github_client_id": "Ov23liXXXXXXXXXXXXXX",
+  "coding_agent": "claude",
+  "ide_command": "cursor",
   "projects": {
     "my-project": {
       "owner": "username",
       "repo": "my-repo",
-      "labels": ["bug", "feature", "backend", "frontend"]
-    },
-    "other-project": {
-      "owner": "org",
-      "repo": "other-repo",
-      "labels": ["bug", "enhancement", "priority:high"]
+      "labels": ["bug", "feature", "backend", "frontend"],
+      "local_path": "/path/to/my-repo",
+      "base_branch": "develop",
+      "list_commands": {
+        "bugs": ["bug"],
+        "frontend": ["frontend", "bug"]
+      }
     }
   }
 }
 ```
 
+#### Global settings
+
 | Field | Description |
 |-------|-------------|
 | `github_client_id` | Client ID from your GitHub OAuth App |
-| `projects.*.owner` | Repository owner (user or organization) |
-| `projects.*.repo` | Repository name |
-| `projects.*.labels` | Available labels for this project |
+| `coding_agent` | Agent for dispatch: `"claude"` or `"opencode"` (default: `"claude"`) |
+| `ide_command` | IDE to open worktrees: `"code"`, `"cursor"`, etc. (auto-detected if not set) |
+| `auto_format_comments` | Auto-format issue comments (default: `false`) |
+| `last_project` | Auto-managed: remembers last selected project |
+
+#### Project settings
+
+| Field | Description |
+|-------|-------------|
+| `owner` | Repository owner (user or organization) |
+| `repo` | Repository name |
+| `labels` | Available labels for issue generation |
+| `local_path` | Local repository path (required for worktree/dispatch features) |
+| `base_branch` | Base branch for new branches (auto-detects main/master/develop if not set) |
+| `list_commands` | Custom filter commands (see below) |
+
+#### Custom filter commands
+
+Define shortcuts to filter issues by labels:
+
+```json
+"list_commands": {
+  "bugs": ["bug"],
+  "urgent": ["bug", "priority:high"]
+}
+```
+
+These become available as `/bugs`, `/urgent` commands in the TUI.
 
 ### 3. Ollama
 
@@ -82,7 +112,9 @@ ollama pull mistral:7b
 ## Usage
 
 ```bash
-cargo run
+assistant              # Start the TUI
+assistant --project my-project   # Start with a specific project
+assistant --logout     # Remove GitHub authentication and exit
 ```
 
 ### GitHub Authentication
@@ -106,54 +138,29 @@ The token is securely stored in the system keychain (macOS Keychain, Windows Cre
 
 ### Commands
 
+Press `/` in the TUI to open the command palette.
+
 | Command | Description |
 |---------|-------------|
 | `/login` | Authenticate with GitHub via browser |
 | `/logout` | Remove GitHub authentication |
-| `/repository <name>` | Select a project from config |
-| `/repo <name>` | Alias for `/repository` |
-| `/issue <description>` | Generate an issue from a description |
-| `/ok` | Create the issue on GitHub |
+| `/repository` | Open interactive project selector (alias: `/repo`) |
+| `/agent` | Select coding agent (Claude Code or Opencode) |
+| `/worktrees` | Manage worktrees (view, delete, open in IDE) |
+| `/prune` | Clean up orphaned worktrees |
 | `/help` | Show help |
 | `/quit` | Exit |
+| `/<custom>` | Custom filter commands defined in config (e.g., `/bugs`) |
 
 ### Example session
 
 ```
-$ cargo run
+$ assistant
 
-Config loaded. Projects: my-project, other-project
-GitHub: not logged in. Use /login to authenticate.
-Commands: /login, /repository <name>, /issue <desc>, /ok, /quit
-
-〉/login
-Starting GitHub authentication...
-[Browser opens automatically]
-Successfully logged in to GitHub!
-
-〉/repository my-project
-Selected project: username/my-repo
-Labels: bug, feature, backend, frontend
-
-〉/issue fix the OAuth connection bug
-
---- Generated Issue ---
-Type: bug
-Labels: bug, backend
-Title: Fix OAuth connection bug
-
-**Context**
-- The OAuth authentication flow is failing.
-
-**Steps to reproduce**
-1. Attempt to log in via OAuth
-2. Observe the error
------------------------
-
-Give feedback to adapt the issue or type /ok to create it.
-
-〉/ok
-Issue created: https://github.com/username/my-repo/issues/42
+# Select a project with /repo, then browse issues
+# Generate new issues by typing a description
+# Dispatch issues to a coding agent with Enter
+# Create PRs from completed work
 ```
 
 ## Environment variables (optional)
@@ -167,11 +174,18 @@ LLM_ENDPOINT=http://localhost:11434/api/chat
 
 ```
 src/
-├── auth.rs      # OAuth Device Flow + keyring
-├── config.rs    # JSON configuration
-├── github.rs    # GitHub API (octocrab)
-├── issues.rs    # Issue generation via LLM
-├── llm.rs       # Ollama communication
-├── lib.rs       # Module exports
-└── main.rs      # CLI REPL
+├── agents/           # Coding agent integrations
+│   ├── claude.rs     # Claude Code dispatch
+│   ├── opencode.rs   # Opencode dispatch
+│   ├── worktree.rs   # Git worktree management
+│   └── session.rs    # Agent session tracking
+├── auth.rs           # OAuth Device Flow + keyring
+├── config.rs         # JSON configuration
+├── github.rs         # GitHub API (octocrab)
+├── issues.rs         # Issue generation via LLM
+├── llm.rs            # Ollama communication
+├── tui.rs            # TUI application
+├── tui_events.rs     # Event handling
+├── tui_draw.rs       # UI rendering
+└── main.rs           # Entry point
 ```
