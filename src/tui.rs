@@ -366,7 +366,7 @@ impl IssueBrowser {
         let next_page = self.current_page + 1;
         match self
             .github
-            .list_issues_paginated(&self.list_labels, &self.list_state_filter, 20, next_page)
+            .list_issues_paginated(&self.list_labels, &self.list_state_filter, 50, next_page)
             .await
         {
             Ok((new_issues, has_next)) => {
@@ -407,7 +407,7 @@ impl IssueBrowser {
 
         match self
             .github
-            .list_issues_paginated(&self.list_labels, &self.list_state_filter, 20, 1)
+            .list_issues_paginated(&self.list_labels, &self.list_state_filter, 50, 1)
             .await
         {
             Ok((new_issues, has_next)) => {
@@ -479,7 +479,7 @@ impl IssueBrowser {
             return;
         }
         let i = match self.list_state.selected() {
-            Some(i) => (i + 1) % self.issues.len(),
+            Some(i) => (i + 1).min(self.issues.len() - 1),
             None => 0,
         };
         self.list_state.select(Some(i));
@@ -490,13 +490,7 @@ impl IssueBrowser {
             return;
         }
         let i = match self.list_state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    self.issues.len() - 1
-                } else {
-                    i - 1
-                }
-            }
+            Some(i) => i.saturating_sub(1),
             None => 0,
         };
         self.list_state.select(Some(i));
