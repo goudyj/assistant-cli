@@ -293,6 +293,21 @@ impl GitHubConfig {
         Ok(page.items.into_iter().map(|u| u.author.login).collect())
     }
 
+    /// List all contributors for the repository
+    pub async fn list_contributors(&self) -> Result<Vec<String>, GitHubError> {
+        let client = self.get_client()?;
+
+        let page = client
+            .repos(&self.owner, &self.repo)
+            .list_contributors()
+            .per_page(100)
+            .send()
+            .await
+            .map_err(Self::map_api_error)?;
+
+        Ok(page.items.into_iter().map(|c| c.author.login).collect())
+    }
+
     /// Assign users to an issue
     pub async fn assign_issue(
         &self,

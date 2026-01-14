@@ -208,6 +208,21 @@ impl IssueBrowser {
         self.coding_agent = agent;
     }
 
+    /// Set available authors from repo contributors (merges with existing)
+    pub fn set_contributors(&mut self, contributors: Vec<String>) {
+        // Merge contributors into available authors for both issues and PRs
+        for contributor in contributors {
+            if !self.available_issue_authors.contains(&contributor) {
+                self.available_issue_authors.push(contributor.clone());
+            }
+            if !self.available_pr_authors.contains(&contributor) {
+                self.available_pr_authors.push(contributor);
+            }
+        }
+        self.available_issue_authors.sort();
+        self.available_pr_authors.sort();
+    }
+
     /// Build worktree list with session status
     pub fn build_worktree_list(&self) -> Vec<crate::agents::WorktreeInfo> {
         let manager = crate::agents::SessionManager::load();
@@ -894,6 +909,9 @@ pub async fn run_issue_browser_with_pagination(
     ide_command: Option<String>,
     coding_agent: crate::config::CodingAgentType,
 ) -> io::Result<()> {
+    // Fetch contributors before moving github into browser
+    let contributors = github.list_contributors().await.unwrap_or_default();
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
@@ -910,6 +928,9 @@ pub async fn run_issue_browser_with_pagination(
         state_filter,
         has_next_page,
     );
+
+    // Add repo contributors to available authors
+    browser.set_contributors(contributors);
 
     if let (Some(name), Some(path)) = (project_name.clone(), local_path) {
         browser.set_project_info(name, path, base_branch);
