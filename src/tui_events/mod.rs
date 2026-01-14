@@ -189,14 +189,8 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
             let mut input = input.clone();
             let mut suggestions = suggestions.clone();
             let mut selected = *selected;
-            command::handle_command_key(
-                browser,
-                key,
-                &mut input,
-                &mut suggestions,
-                &mut selected,
-            )
-            .await;
+            command::handle_command_key(browser, key, &mut input, &mut suggestions, &mut selected)
+                .await;
             if let TuiView::Command {
                 input: ref mut i,
                 suggestions: ref mut s,

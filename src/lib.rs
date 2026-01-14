@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod auth;
 pub mod clipboard;
+pub mod commands;
 pub mod config;
 pub mod embedded_term;
 pub mod github;

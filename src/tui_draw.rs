@@ -4,6 +4,7 @@ use std::path::Path;
 
 use std::collections::HashSet;
 
+use crate::commands::{format_status_bar, generate_full_help, CommandContext};
 use crate::github::{IssueDetail, PullRequestDetail};
 use crate::issues::IssueContent;
 use crate::markdown::{parse_markdown_content, render_markdown_line};
@@ -490,10 +491,7 @@ fn build_list_title(browser: &IssueBrowser) -> String {
         parts.push(format!("[{} selected]", browser.selected_issues.len()));
     }
 
-    format!(
-        " {} │ C ai │ N new │ d dispatch │ o ide │ p pr │ t tmux │ R refresh │ / cmd │ ? help │ q quit ",
-        parts.join(" ")
-    )
+    format_status_bar(CommandContext::IssueList, &parts.join(" "))
 }
 
 /// Draw centered search popup
@@ -1339,7 +1337,7 @@ pub fn draw_worktree_list(
             .alignment(Alignment::Center);
         f.render_widget(empty_msg, chunks[0]);
 
-        let help = Paragraph::new("n: new │ Esc: back")
+        let help = Paragraph::new(format_status_bar(CommandContext::WorktreeList, ""))
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center);
         f.render_widget(help, chunks[1]);
@@ -1411,7 +1409,7 @@ pub fn draw_worktree_list(
     f.render_widget(list, chunks[0]);
 
     // Help bar
-    let help = Paragraph::new("n: new │ t: tmux │ o: IDE │ p: PR │ d: delete │ K: kill │ Esc: back")
+    let help = Paragraph::new(format_status_bar(CommandContext::WorktreeList, ""))
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Center);
     f.render_widget(help, chunks[1]);
@@ -1635,98 +1633,19 @@ pub fn draw_post_worktree_create(f: &mut Frame, worktree_path: &Path, branch_nam
     f.render_widget(help, chunks[3]);
 }
 
-/// Draw help screen with all keyboard shortcuts
+/// Draw help screen with all keyboard shortcuts (auto-generated from commands module)
 pub fn draw_help(f: &mut Frame) {
     let area = f.area();
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Keyboard Shortcuts │ Esc/q/? to close ")
+        .title(" Keyboard Shortcuts \u{2502} Esc/q/? to close ")
         .border_style(Style::default().fg(Color::Cyan));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let help_text = vec![
-        Line::from(vec![
-            Span::styled("ISSUE LIST", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  Navigation", Style::default().fg(Color::Cyan)),
-        ]),
-        Line::from("    j/↓       Move down"),
-        Line::from("    k/↑       Move up"),
-        Line::from("    Tab       Switch to PRs"),
-        Line::from("    Enter     Open issue details"),
-        Line::from("    s         Search GitHub"),
-        Line::from("    /         Open command palette"),
-        Line::from("    q         Quit"),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  Issues", Style::default().fg(Color::Cyan)),
-        ]),
-        Line::from("    C         Create issue with AI"),
-        Line::from("    N         Create issue (direct)"),
-        Line::from("    c         Add comment"),
-        Line::from("    Space     Select/deselect issue"),
-        Line::from("    R         Refresh issues"),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  Agent / Worktree", Style::default().fg(Color::Cyan)),
-        ]),
-        Line::from("    d         Dispatch agent"),
-        Line::from("    o         Open worktree in IDE"),
-        Line::from("    p         Create PR"),
-        Line::from("    l         View agent logs"),
-        Line::from("    K         Kill running agent"),
-        Line::from("    W         Delete worktree"),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  Tmux", Style::default().fg(Color::Cyan)),
-        ]),
-        Line::from("    t         Open tmux for issue"),
-        Line::from("    T         Embedded tmux terminal"),
-        Line::from("    ESC ESC   Exit embedded terminal"),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("DETAIL VIEW", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        ]),
-        Line::from(""),
-        Line::from("    o         Open in browser"),
-        Line::from("    c         Add comment"),
-        Line::from("    a         Assign user"),
-        Line::from("    x         Close issue"),
-        Line::from("    X         Reopen issue"),
-        Line::from("    d         Dispatch agent"),
-        Line::from("    i/O       Navigate images"),
-        Line::from("    Esc       Back to list"),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("WORKTREE LIST", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        ]),
-        Line::from(""),
-        Line::from("    n         Create new worktree"),
-        Line::from("    t         Open tmux session"),
-        Line::from("    o         Open in IDE"),
-        Line::from("    p         Create PR"),
-        Line::from("    d         Delete worktree"),
-        Line::from("    K         Kill tmux session"),
-        Line::from("    Esc       Back to list"),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("PULL REQUEST LIST", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        ]),
-        Line::from(""),
-        Line::from("    Tab       Switch to Issues"),
-        Line::from("    Enter     Open PR details"),
-        Line::from("    o         Open in browser"),
-        Line::from("    c         Checkout branch (worktree)"),
-        Line::from("    r         Review with agent"),
-        Line::from("    m         Merge PR"),
-        Line::from("    f         Open filters"),
-        Line::from("    Esc/q     Back to issues"),
-    ];
+    let help_text = generate_full_help();
 
     let paragraph = Paragraph::new(help_text).scroll((0, 0));
     f.render_widget(paragraph, inner);
@@ -1949,10 +1868,7 @@ fn build_pr_list_title(browser: &IssueBrowser) -> String {
         parts.push(format!("[{} total]", browser.pull_requests.len()));
     }
 
-    // Keyboard shortcuts
-    parts.push("│ Tab:issues │ f:filter │ ?:help │ q:quit".to_string());
-
-    format!(" {} ", parts.join(" "))
+    format_status_bar(CommandContext::PullRequestList, &parts.join(" "))
 }
 
 /// Draw PR detail view

@@ -1,9 +1,10 @@
 use assistant::auth;
+use assistant::commands::CommandRegistry;
 use assistant::config;
 use assistant::github::GitHubConfig;
 use assistant::list::IssueState;
 use assistant::llm;
-use assistant::tui::{self, CommandSuggestion};
+use assistant::tui;
 
 #[tokio::main]
 async fn main() {
@@ -110,58 +111,9 @@ async fn main() {
     config.set_last_project(&project_name);
     let _ = config.save();
 
-    // 3. Build command suggestions for command palette
-    let mut commands: Vec<CommandSuggestion> = vec![
-        CommandSuggestion {
-            name: "all".to_string(),
-            description: "Show all issues (clear filters)".to_string(),
-            labels: None,
-        },
-        CommandSuggestion {
-            name: "issues".to_string(),
-            description: "Show issues list".to_string(),
-            labels: None,
-        },
-        CommandSuggestion {
-            name: "prs".to_string(),
-            description: "Show pull requests list".to_string(),
-            labels: None,
-        },
-        CommandSuggestion {
-            name: "logout".to_string(),
-            description: "Logout from GitHub".to_string(),
-            labels: None,
-        },
-        CommandSuggestion {
-            name: "repository".to_string(),
-            description: "Switch repository".to_string(),
-            labels: None,
-        },
-        CommandSuggestion {
-            name: "worktrees".to_string(),
-            description: "Manage worktrees (view, delete, open IDE)".to_string(),
-            labels: None,
-        },
-        CommandSuggestion {
-            name: "prune".to_string(),
-            description: "Clean up orphaned worktrees".to_string(),
-            labels: None,
-        },
-        CommandSuggestion {
-            name: "agent".to_string(),
-            description: "Select dispatch agent (Claude Code or Opencode)".to_string(),
-            labels: None,
-        },
-    ];
-
-    // Add custom list commands from project config
-    for (name, labels) in &project.list_commands {
-        commands.push(CommandSuggestion {
-            name: name.clone(),
-            description: format!("Filter: {}", labels.join(", ")),
-            labels: Some(labels.clone()),
-        });
-    }
+    // 3. Build command suggestions for command palette (from centralized registry)
+    let registry = CommandRegistry::with_custom_commands(&project.list_commands);
+    let commands = registry.to_suggestions();
 
     // 4. Build available projects list
     let available_projects: Vec<_> = config

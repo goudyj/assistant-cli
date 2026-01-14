@@ -105,6 +105,9 @@ cargo test config::tests            # Module tests
 Inside the TUI, press `/` to open the command palette:
 
 ```
+/all                - Show all issues (clear filters)
+/issues             - Show issues list
+/prs                - Show pull requests list
 /logout             - Remove GitHub authentication
 /repository         - Open interactive project selector (alias: /repo)
 /agent              - Select dispatch agent (Claude Code or Opencode)
