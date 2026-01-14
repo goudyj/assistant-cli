@@ -56,7 +56,7 @@ pub fn handle_pr_filters_key(
         }
         KeyCode::Enter => {
             if *focus == PrFilterFocus::Author && !author_input.is_empty() {
-                // Add author from search input
+                // Add author from search input and apply immediately
                 let author_to_add = if !author_suggestions.is_empty()
                     && *selected_author < author_suggestions.len()
                 {
@@ -64,20 +64,13 @@ pub fn handle_pr_filters_key(
                 } else {
                     author_input.clone()
                 };
+                author_filter.clear();
                 author_filter.insert(author_to_add);
-                author_input.clear();
-                *author_suggestions = available_authors.to_vec();
-                *selected_author = 0;
-                browser.view = build_view(
-                    status_filter,
-                    author_filter,
-                    available_authors,
-                    *focus,
-                    *selected_status,
-                    *selected_author,
-                    author_input.clone(),
-                    author_suggestions.clone(),
-                );
+                // Apply filters and close
+                browser.pr_status_filter = status_filter.clone();
+                browser.pr_author_filter = author_filter.clone();
+                browser.apply_pr_filters();
+                browser.view = TuiView::PullRequestList;
             } else if *focus == PrFilterFocus::Author && author_input.is_empty() {
                 // Single-select author: toggle and apply immediately
                 if let Some(author) = author_suggestions.get(*selected_author) {
@@ -267,7 +260,7 @@ pub fn handle_issue_filters_key(
         }
         KeyCode::Enter => {
             if *focus == IssueFilterFocus::Author && !author_input.is_empty() {
-                // Add author from search input
+                // Add author from search input and apply immediately
                 let author_to_add = if !author_suggestions.is_empty()
                     && *selected_author < author_suggestions.len()
                 {
@@ -275,20 +268,13 @@ pub fn handle_issue_filters_key(
                 } else {
                     author_input.clone()
                 };
+                author_filter.clear();
                 author_filter.insert(author_to_add);
-                author_input.clear();
-                *author_suggestions = available_authors.to_vec();
-                *selected_author = 0;
-                browser.view = build_view(
-                    status_filter,
-                    author_filter,
-                    available_authors,
-                    *focus,
-                    *selected_status,
-                    *selected_author,
-                    author_input.clone(),
-                    author_suggestions.clone(),
-                );
+                // Apply filters and close
+                browser.issue_status_filter = status_filter.clone();
+                browser.issue_author_filter = author_filter.clone();
+                browser.apply_issue_filters();
+                browser.view = TuiView::List;
             } else if *focus == IssueFilterFocus::Author && author_input.is_empty() {
                 // Single-select author: toggle and apply immediately
                 if let Some(author) = author_suggestions.get(*selected_author) {
