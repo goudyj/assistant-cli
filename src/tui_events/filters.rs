@@ -56,6 +56,7 @@ pub fn handle_pr_filters_key(
         }
         KeyCode::Enter => {
             if *focus == PrFilterFocus::Author && !author_input.is_empty() {
+                // Add author from search input
                 let author_to_add = if !author_suggestions.is_empty()
                     && *selected_author < author_suggestions.len()
                 {
@@ -77,7 +78,27 @@ pub fn handle_pr_filters_key(
                     author_input.clone(),
                     author_suggestions.clone(),
                 );
+            } else if *focus == PrFilterFocus::Author && author_input.is_empty() {
+                // Toggle author selection with Enter (same as Space)
+                if let Some(author) = author_suggestions.get(*selected_author) {
+                    if author_filter.contains(author) {
+                        author_filter.remove(author);
+                    } else {
+                        author_filter.insert(author.clone());
+                    }
+                }
+                browser.view = build_view(
+                    status_filter,
+                    author_filter,
+                    available_authors,
+                    *focus,
+                    *selected_status,
+                    *selected_author,
+                    author_input.clone(),
+                    author_suggestions.clone(),
+                );
             } else {
+                // Apply filters and close
                 browser.pr_status_filter = status_filter.clone();
                 browser.pr_author_filter = author_filter.clone();
                 browser.apply_pr_filters();
@@ -253,6 +274,7 @@ pub fn handle_issue_filters_key(
         }
         KeyCode::Enter => {
             if *focus == IssueFilterFocus::Author && !author_input.is_empty() {
+                // Add author from search input
                 let author_to_add = if !author_suggestions.is_empty()
                     && *selected_author < author_suggestions.len()
                 {
@@ -274,7 +296,27 @@ pub fn handle_issue_filters_key(
                     author_input.clone(),
                     author_suggestions.clone(),
                 );
+            } else if *focus == IssueFilterFocus::Author && author_input.is_empty() {
+                // Toggle author selection with Enter (same as Space)
+                if let Some(author) = author_suggestions.get(*selected_author) {
+                    if author_filter.contains(author) {
+                        author_filter.remove(author);
+                    } else {
+                        author_filter.insert(author.clone());
+                    }
+                }
+                browser.view = build_view(
+                    status_filter,
+                    author_filter,
+                    available_authors,
+                    *focus,
+                    *selected_status,
+                    *selected_author,
+                    author_input.clone(),
+                    author_suggestions.clone(),
+                );
             } else {
+                // Apply filters and close
                 browser.issue_status_filter = status_filter.clone();
                 browser.issue_author_filter = author_filter.clone();
                 browser.apply_issue_filters();
