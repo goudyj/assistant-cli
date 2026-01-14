@@ -79,7 +79,7 @@ pub fn handle_pr_filters_key(
                     author_suggestions.clone(),
                 );
             } else if *focus == PrFilterFocus::Author && author_input.is_empty() {
-                // Single-select author: toggle off if selected, or replace selection
+                // Single-select author: toggle and apply immediately
                 if let Some(author) = author_suggestions.get(*selected_author) {
                     if author_filter.contains(author) {
                         author_filter.clear();
@@ -88,16 +88,11 @@ pub fn handle_pr_filters_key(
                         author_filter.insert(author.clone());
                     }
                 }
-                browser.view = build_view(
-                    status_filter,
-                    author_filter,
-                    available_authors,
-                    *focus,
-                    *selected_status,
-                    *selected_author,
-                    author_input.clone(),
-                    author_suggestions.clone(),
-                );
+                // Apply filters and close
+                browser.pr_status_filter = status_filter.clone();
+                browser.pr_author_filter = author_filter.clone();
+                browser.apply_pr_filters();
+                browser.view = TuiView::PullRequestList;
             } else {
                 // Apply filters and close
                 browser.pr_status_filter = status_filter.clone();
@@ -185,7 +180,7 @@ pub fn handle_pr_filters_key(
             );
         }
         KeyCode::Char(' ') if *focus == PrFilterFocus::Author && author_input.is_empty() => {
-            // Single-select author: toggle off if selected, or replace selection
+            // Single-select author: toggle and apply immediately
             if let Some(author) = author_suggestions.get(*selected_author) {
                 if author_filter.contains(author) {
                     author_filter.clear();
@@ -194,16 +189,11 @@ pub fn handle_pr_filters_key(
                     author_filter.insert(author.clone());
                 }
             }
-            browser.view = build_view(
-                status_filter,
-                author_filter,
-                available_authors,
-                *focus,
-                *selected_status,
-                *selected_author,
-                author_input.clone(),
-                author_suggestions.clone(),
-            );
+            // Apply filters and close
+            browser.pr_status_filter = status_filter.clone();
+            browser.pr_author_filter = author_filter.clone();
+            browser.apply_pr_filters();
+            browser.view = TuiView::PullRequestList;
         }
         KeyCode::Char(c) if *focus == PrFilterFocus::Author => {
             author_input.push(c);
@@ -300,7 +290,7 @@ pub fn handle_issue_filters_key(
                     author_suggestions.clone(),
                 );
             } else if *focus == IssueFilterFocus::Author && author_input.is_empty() {
-                // Single-select author: toggle off if selected, or replace selection
+                // Single-select author: toggle and apply immediately
                 if let Some(author) = author_suggestions.get(*selected_author) {
                     if author_filter.contains(author) {
                         author_filter.clear();
@@ -309,16 +299,11 @@ pub fn handle_issue_filters_key(
                         author_filter.insert(author.clone());
                     }
                 }
-                browser.view = build_view(
-                    status_filter,
-                    author_filter,
-                    available_authors,
-                    *focus,
-                    *selected_status,
-                    *selected_author,
-                    author_input.clone(),
-                    author_suggestions.clone(),
-                );
+                // Apply filters and close
+                browser.issue_status_filter = status_filter.clone();
+                browser.issue_author_filter = author_filter.clone();
+                browser.apply_issue_filters();
+                browser.view = TuiView::List;
             } else {
                 // Apply filters and close
                 browser.issue_status_filter = status_filter.clone();
@@ -406,7 +391,7 @@ pub fn handle_issue_filters_key(
             );
         }
         KeyCode::Char(' ') if *focus == IssueFilterFocus::Author && author_input.is_empty() => {
-            // Single-select author: toggle off if selected, or replace selection
+            // Single-select author: toggle and apply immediately
             if let Some(author) = author_suggestions.get(*selected_author) {
                 if author_filter.contains(author) {
                     author_filter.clear();
@@ -415,16 +400,11 @@ pub fn handle_issue_filters_key(
                     author_filter.insert(author.clone());
                 }
             }
-            browser.view = build_view(
-                status_filter,
-                author_filter,
-                available_authors,
-                *focus,
-                *selected_status,
-                *selected_author,
-                author_input.clone(),
-                author_suggestions.clone(),
-            );
+            // Apply filters and close
+            browser.issue_status_filter = status_filter.clone();
+            browser.issue_author_filter = author_filter.clone();
+            browser.apply_issue_filters();
+            browser.view = TuiView::List;
         }
         KeyCode::Char(c) if *focus == IssueFilterFocus::Author => {
             author_input.push(c);
