@@ -125,6 +125,7 @@ impl EmbeddedTerminal {
             KeyCode::Enter => vec![b'\r'],
             KeyCode::Backspace => vec![127],
             KeyCode::Tab => vec![b'\t'],
+            KeyCode::BackTab => b"\x1b[Z".to_vec(), // Shift+Tab
             KeyCode::Up => b"\x1b[A".to_vec(),
             KeyCode::Down => b"\x1b[B".to_vec(),
             KeyCode::Right => b"\x1b[C".to_vec(),
