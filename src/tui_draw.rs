@@ -2188,9 +2188,10 @@ fn draw_pr_filters_popup(
         });
     f.render_widget(input_paragraph, chunks[3]);
 
-    // Author list: show suggestions if typing, otherwise show selected authors
-    let author_items: Vec<ListItem> = if !author_input.is_empty() {
-        // Show suggestions
+    // Author list: always show all available authors with checkmarks
+    let author_items: Vec<ListItem> = if author_suggestions.is_empty() {
+        vec![ListItem::new("No authors available").style(Style::default().fg(Color::DarkGray))]
+    } else {
         author_suggestions
             .iter()
             .enumerate()
@@ -2204,24 +2205,6 @@ fn draw_pr_filters_popup(
                 ListItem::new(format!("{} @{}", checked, author)).style(style)
             })
             .collect()
-    } else {
-        // Show selected authors + hint to add more
-        let mut items: Vec<ListItem> = author_filter
-            .iter()
-            .enumerate()
-            .map(|(i, author)| {
-                let style = if *focus == PrFilterFocus::Author && i == selected_author {
-                    Style::default().bg(Color::DarkGray)
-                } else {
-                    Style::default()
-                };
-                ListItem::new(format!("[x] @{}", author)).style(style)
-            })
-            .collect();
-        if items.is_empty() {
-            items.push(ListItem::new("No authors selected").style(Style::default().fg(Color::DarkGray)));
-        }
-        items
     };
 
     let author_list = List::new(author_items);
@@ -2326,9 +2309,10 @@ fn draw_issue_filters_popup(
         });
     f.render_widget(input_paragraph, chunks[3]);
 
-    // Author list: show suggestions if typing, otherwise show selected authors
-    let author_items: Vec<ListItem> = if !author_input.is_empty() {
-        // Show suggestions
+    // Author list: always show all available authors with checkmarks
+    let author_items: Vec<ListItem> = if author_suggestions.is_empty() {
+        vec![ListItem::new("No authors available").style(Style::default().fg(Color::DarkGray))]
+    } else {
         author_suggestions
             .iter()
             .enumerate()
@@ -2342,24 +2326,6 @@ fn draw_issue_filters_popup(
                 ListItem::new(format!("{} @{}", checked, author)).style(style)
             })
             .collect()
-    } else {
-        // Show selected authors + hint to add more
-        let mut items: Vec<ListItem> = author_filter
-            .iter()
-            .enumerate()
-            .map(|(i, author)| {
-                let style = if *focus == IssueFilterFocus::Author && i == selected_author {
-                    Style::default().bg(Color::DarkGray)
-                } else {
-                    Style::default()
-                };
-                ListItem::new(format!("[x] @{}", author)).style(style)
-            })
-            .collect();
-        if items.is_empty() {
-            items.push(ListItem::new("No authors selected").style(Style::default().fg(Color::DarkGray)));
-        }
-        items
     };
 
     let author_list = List::new(author_items);
