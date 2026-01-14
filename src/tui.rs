@@ -673,10 +673,12 @@ impl IssueBrowser {
             .await
         {
             Ok((prs, has_next)) => {
-                // Extract unique authors
-                let authors: std::collections::HashSet<_> =
-                    prs.iter().map(|pr| pr.author.clone()).collect();
-                self.available_pr_authors = authors.into_iter().collect();
+                // Merge PR authors with existing (contributors)
+                for pr in &prs {
+                    if !self.available_pr_authors.contains(&pr.author) {
+                        self.available_pr_authors.push(pr.author.clone());
+                    }
+                }
                 self.available_pr_authors.sort();
 
                 self.all_pull_requests = prs.clone();
