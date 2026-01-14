@@ -642,6 +642,77 @@ impl GitHubConfig {
         Ok((prs, has_next))
     }
 
+    /// Search for pull requests by authors with state filter
+    pub async fn search_pull_requests_with_state(
+        &self,
+        authors: &[String],
+        state: &crate::list::IssueState,
+        per_page: u8,
+        page_num: u32,
+    ) -> Result<(Vec<PullRequestSummary>, bool), GitHubError> {
+        let client = self.get_client()?;
+
+        // Build search query: repo:owner/repo is:pr state:X [author:X OR author:Y ...]
+        let mut query_parts = vec![
+            format!("repo:{}/{}", self.owner, self.repo),
+            "is:pr".to_string(),
+        ];
+
+        // Add state filter
+        match state {
+            crate::list::IssueState::Open => query_parts.push("state:open".to_string()),
+            crate::list::IssueState::Closed => query_parts.push("state:closed".to_string()),
+            crate::list::IssueState::All => {} // No state filter
+        }
+
+        // Add author filters - GitHub treats multiple author: as OR
+        for author in authors {
+            query_parts.push(format!("author:{}", author));
+        }
+
+        let search_query = query_parts.join(" ");
+
+        let page = client
+            .search()
+            .issues_and_pull_requests(&search_query)
+            .per_page(per_page)
+            .page(page_num)
+            .send()
+            .await
+            .map_err(Self::map_api_error)?;
+
+        let has_next = page.next.is_some();
+
+        let prs = page
+            .items
+            .into_iter()
+            .map(|issue| {
+                let is_draft = issue.title.starts_with("[WIP]")
+                    || issue.title.starts_with("WIP:")
+                    || issue.title.to_lowercase().starts_with("draft:");
+
+                let state_str = format!("{:?}", issue.state);
+
+                PullRequestSummary {
+                    number: issue.number,
+                    title: issue.title,
+                    html_url: issue.html_url.to_string(),
+                    labels: issue.labels.iter().map(|l| l.name.clone()).collect(),
+                    state: state_str,
+                    assignees: issue.assignees.iter().map(|u| u.login.clone()).collect(),
+                    author: issue.user.login.clone(),
+                    draft: is_draft,
+                    head_ref: String::new(),
+                    base_ref: String::new(),
+                    mergeable: None,
+                    review_decision: None,
+                }
+            })
+            .collect();
+
+        Ok((prs, has_next))
+    }
+
     fn map_api_error(e: octocrab::Error) -> GitHubError {
         let msg = e.to_string();
         if msg.contains("401") || msg.to_lowercase().contains("unauthorized") {

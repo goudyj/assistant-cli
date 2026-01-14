@@ -711,9 +711,11 @@ impl IssueBrowser {
         let api_state = PrStatus::to_api_state(&self.pr_status_filter);
 
         let result = if !self.pr_author_filter.is_empty() {
-            // Use Search API for author filtering
+            // Use Search API for author filtering with state
             let authors: Vec<String> = self.pr_author_filter.iter().cloned().collect();
-            self.github.search_pull_requests(&authors, 100, next_page).await
+            self.github
+                .search_pull_requests_with_state(&authors, &api_state, 100, next_page)
+                .await
         } else {
             // Use List API with status filter
             self.github
@@ -759,7 +761,9 @@ impl IssueBrowser {
         let result = if !self.pr_author_filter.is_empty() {
             // Use Search API for author filtering (finds older PRs)
             let authors: Vec<String> = self.pr_author_filter.iter().cloned().collect();
-            self.github.search_pull_requests(&authors, 100, 1).await
+            self.github
+                .search_pull_requests_with_state(&authors, &api_state, 100, 1)
+                .await
         } else {
             // Use List API with status filter
             self.github
