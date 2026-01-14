@@ -10,9 +10,10 @@
 
 use crate::clipboard::get_clipboard_content;
 use crate::config::ProjectConfig;
-use crate::github::{GitHubConfig, IssueDetail, IssueSummary};
+use crate::github::{GitHubConfig, IssueDetail, IssueSummary, PullRequestSummary};
 use crate::images::extract_image_urls;
 use crate::llm;
+use crate::tui_types::{IssueStatus, PrStatus};
 
 // Re-export types for external use
 pub use crate::tui_types::{CommandSuggestion, CreateStage, TuiView};
@@ -84,6 +85,23 @@ pub struct IssueBrowser {
     pub ide_command: Option<String>,
     // Coding agent type for dispatch
     pub coding_agent: crate::config::CodingAgentType,
+    // Current project name for session management
+    pub current_project: String,
+    // Pull request state
+    pub all_pull_requests: Vec<PullRequestSummary>,
+    pub pull_requests: Vec<PullRequestSummary>,
+    pub pr_list_state: ListState,
+    pub pr_current_page: u32,
+    pub pr_has_next_page: bool,
+    pub pr_is_loading: bool,
+    // PR filters
+    pub pr_status_filter: std::collections::HashSet<PrStatus>,
+    pub pr_author_filter: std::collections::HashSet<String>,
+    pub available_pr_authors: Vec<String>,
+    // Issue filters
+    pub issue_status_filter: std::collections::HashSet<IssueStatus>,
+    pub issue_author_filter: std::collections::HashSet<String>,
+    pub available_issue_authors: Vec<String>,
 }
 
 impl IssueBrowser {
@@ -155,6 +173,19 @@ impl IssueBrowser {
             available_projects: Vec::new(),
             ide_command: None,
             coding_agent: crate::config::CodingAgentType::default(),
+            current_project: String::new(),
+            all_pull_requests: Vec::new(),
+            pull_requests: Vec::new(),
+            pr_list_state: ListState::default(),
+            pr_current_page: 1,
+            pr_has_next_page: false,
+            pr_is_loading: false,
+            pr_status_filter: std::collections::HashSet::new(),
+            pr_author_filter: std::collections::HashSet::new(),
+            available_pr_authors: Vec::new(),
+            issue_status_filter: std::collections::HashSet::new(),
+            issue_author_filter: std::collections::HashSet::new(),
+            available_issue_authors: Vec::new(),
         }
     }
 
@@ -197,6 +228,7 @@ impl IssueBrowser {
     /// Set project info for Claude Code dispatch
     pub fn set_project_info(&mut self, name: String, path: std::path::PathBuf, base_branch: Option<String>) {
         self.project_name = Some(name.clone());
+        self.current_project = name.clone();
         self.local_path = Some(path);
         self.base_branch = base_branch;
         self.refresh_sessions(&name);
@@ -231,11 +263,36 @@ impl IssueBrowser {
         self.project_labels = project.labels.clone();
         self.list_labels.clear();
 
+        // Clear PR cache
+        self.all_pull_requests.clear();
+        self.pull_requests.clear();
+        self.pr_list_state = ListState::default();
+        self.pr_current_page = 1;
+        self.pr_has_next_page = false;
+        self.pr_status_filter.clear();
+        self.pr_author_filter.clear();
+        self.available_pr_authors.clear();
+
+        // Clear issue filters
+        self.issue_status_filter.clear();
+        self.issue_author_filter.clear();
+        self.available_issue_authors.clear();
+
         // Rebuild commands
         let mut commands = vec![
             CommandSuggestion {
                 name: "all".to_string(),
                 description: "Show all issues (clear filters)".to_string(),
+                labels: None,
+            },
+            CommandSuggestion {
+                name: "issues".to_string(),
+                description: "Show issues list".to_string(),
+                labels: None,
+            },
+            CommandSuggestion {
+                name: "prs".to_string(),
+                description: "Show pull requests list".to_string(),
                 labels: None,
             },
             CommandSuggestion {
@@ -259,13 +316,8 @@ impl IssueBrowser {
                 labels: None,
             },
             CommandSuggestion {
-                name: "claude".to_string(),
-                description: "Use Claude Code for dispatch".to_string(),
-                labels: None,
-            },
-            CommandSuggestion {
-                name: "opencode".to_string(),
-                description: "Use Opencode for dispatch".to_string(),
+                name: "agent".to_string(),
+                description: "Select dispatch agent (Claude Code or Opencode)".to_string(),
                 labels: None,
             },
         ];
@@ -366,7 +418,7 @@ impl IssueBrowser {
         let next_page = self.current_page + 1;
         match self
             .github
-            .list_issues_paginated(&self.list_labels, &self.list_state_filter, 50, next_page)
+            .list_issues_paginated(&self.list_labels, &self.list_state_filter, 100, next_page)
             .await
         {
             Ok((new_issues, has_next)) => {
@@ -402,20 +454,39 @@ impl IssueBrowser {
     }
 
     /// Reload issues from scratch (page 1)
+    /// Uses Search API if author filters are set (allows finding older issues)
+    /// Uses List API if no author filters (faster, respects label filters)
     pub async fn reload_issues(&mut self) {
         self.is_loading = true;
 
-        match self
-            .github
-            .list_issues_paginated(&self.list_labels, &self.list_state_filter, 50, 1)
-            .await
-        {
+        let result = if !self.issue_author_filter.is_empty() {
+            // Use Search API for author filtering (finds older issues)
+            let authors: Vec<String> = self.issue_author_filter.iter().cloned().collect();
+            self.github.search_issues_by_authors(&authors, 100, 1).await
+        } else {
+            // Use List API for no author filter (respects labels)
+            self.github
+                .list_issues_paginated(&self.list_labels, &self.list_state_filter, 100, 1)
+                .await
+        };
+
+        match result {
             Ok((new_issues, has_next)) => {
-                self.all_issues = new_issues.clone();
-                self.issues = new_issues;
+                // Update available authors from results
+                for issue in &new_issues {
+                    if !self.available_issue_authors.contains(&issue.author) {
+                        self.available_issue_authors.push(issue.author.clone());
+                    }
+                }
+                self.available_issue_authors.sort();
+
+                self.all_issues = new_issues;
                 self.current_page = 1;
                 self.has_next_page = has_next;
                 self.search_query = None;
+
+                // Apply status filter locally
+                self.apply_issue_filters();
 
                 if !self.issues.is_empty() {
                     self.list_state.select(Some(0));
@@ -426,6 +497,38 @@ impl IssueBrowser {
             }
         }
         self.is_loading = false;
+    }
+
+    /// Apply issue filters to the list (local filtering for status, OR logic)
+    pub fn apply_issue_filters(&mut self) {
+        self.issues = self
+            .all_issues
+            .iter()
+            .filter(|issue| {
+                // Apply status filter (OR logic: matches any selected status)
+                let status_match = self.issue_status_filter.is_empty()
+                    || self.issue_status_filter.iter().any(|s| s.matches(issue));
+
+                // Author filter: if using Search API, all results match
+                // If not using Search API, filter locally
+                let author_match = self.issue_author_filter.is_empty()
+                    || self.issue_author_filter.contains(&issue.author);
+
+                status_match && author_match
+            })
+            .cloned()
+            .collect();
+
+        // Reset selection if out of bounds
+        if let Some(selected) = self.list_state.selected() {
+            if selected >= self.issues.len() {
+                self.list_state.select(if self.issues.is_empty() {
+                    None
+                } else {
+                    Some(self.issues.len() - 1)
+                });
+            }
+        }
     }
 
     /// Load available assignees from GitHub API
@@ -494,6 +597,235 @@ impl IssueBrowser {
             None => 0,
         };
         self.list_state.select(Some(i));
+    }
+
+    // PR navigation methods
+    pub fn pr_next(&mut self) {
+        if self.pull_requests.is_empty() {
+            return;
+        }
+        let i = match self.pr_list_state.selected() {
+            Some(i) => (i + 1).min(self.pull_requests.len() - 1),
+            None => 0,
+        };
+        self.pr_list_state.select(Some(i));
+    }
+
+    pub fn pr_previous(&mut self) {
+        if self.pull_requests.is_empty() {
+            return;
+        }
+        let i = match self.pr_list_state.selected() {
+            Some(i) => i.saturating_sub(1),
+            None => 0,
+        };
+        self.pr_list_state.select(Some(i));
+    }
+
+    pub fn selected_pr(&self) -> Option<&PullRequestSummary> {
+        self.pr_list_state
+            .selected()
+            .and_then(|i| self.pull_requests.get(i))
+    }
+
+    /// Load pull requests for the current project
+    pub async fn load_pull_requests(&mut self) {
+        if !self.all_pull_requests.is_empty() {
+            return; // Already loaded
+        }
+
+        self.pr_is_loading = true;
+        match self
+            .github
+            .list_pull_requests_paginated(&crate::list::IssueState::All, 100, 1)
+            .await
+        {
+            Ok((prs, has_next)) => {
+                // Extract unique authors
+                let authors: std::collections::HashSet<_> =
+                    prs.iter().map(|pr| pr.author.clone()).collect();
+                self.available_pr_authors = authors.into_iter().collect();
+                self.available_pr_authors.sort();
+
+                self.all_pull_requests = prs.clone();
+                self.pull_requests = prs;
+                self.pr_has_next_page = has_next;
+                self.pr_current_page = 1;
+
+                // Apply default filter (Open only)
+                if self.pr_status_filter.is_empty() {
+                    self.pr_status_filter.insert(PrStatus::Open);
+                }
+                self.apply_pr_filters();
+
+                if !self.pull_requests.is_empty() {
+                    self.pr_list_state.select(Some(0));
+                }
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Failed to load PRs: {}", e));
+            }
+        }
+        self.pr_is_loading = false;
+    }
+
+    /// Load next page of pull requests
+    /// Uses same API as reload_pull_requests (Search or List based on filters)
+    pub async fn load_next_pr_page(&mut self) {
+        if !self.pr_has_next_page || self.pr_is_loading {
+            return;
+        }
+
+        self.pr_is_loading = true;
+        let next_page = self.pr_current_page + 1;
+
+        let result = if !self.pr_author_filter.is_empty() {
+            // Use Search API for author filtering
+            let authors: Vec<String> = self.pr_author_filter.iter().cloned().collect();
+            self.github.search_pull_requests(&authors, 100, next_page).await
+        } else {
+            // Use List API
+            self.github
+                .list_pull_requests_paginated(&crate::list::IssueState::All, 100, next_page)
+                .await
+        };
+
+        match result {
+            Ok((new_prs, has_next)) => {
+                // Update unique authors
+                for pr in &new_prs {
+                    if !self.available_pr_authors.contains(&pr.author) {
+                        self.available_pr_authors.push(pr.author.clone());
+                    }
+                }
+                self.available_pr_authors.sort();
+
+                self.all_pull_requests.extend(new_prs);
+                self.apply_pr_filters();
+                self.pr_has_next_page = has_next;
+                self.pr_current_page = next_page;
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Failed to load more PRs: {}", e));
+            }
+        }
+        self.pr_is_loading = false;
+    }
+
+    /// Reload pull requests from scratch
+    /// Uses Search API if author filters are set (allows finding older PRs)
+    /// Uses List API if no author filters (faster, more complete data)
+    pub async fn reload_pull_requests(&mut self) {
+        self.all_pull_requests.clear();
+        self.pull_requests.clear();
+        self.pr_current_page = 1;
+        self.pr_has_next_page = false;
+        self.pr_list_state.select(None);
+        self.pr_is_loading = true;
+
+        let result = if !self.pr_author_filter.is_empty() {
+            // Use Search API for author filtering (finds older PRs)
+            let authors: Vec<String> = self.pr_author_filter.iter().cloned().collect();
+            self.github.search_pull_requests(&authors, 100, 1).await
+        } else {
+            // Use List API for no author filter (faster, more info)
+            self.github
+                .list_pull_requests_paginated(&crate::list::IssueState::All, 100, 1)
+                .await
+        };
+
+        match result {
+            Ok((prs, has_next)) => {
+                // Update available authors from results
+                for pr in &prs {
+                    if !self.available_pr_authors.contains(&pr.author) {
+                        self.available_pr_authors.push(pr.author.clone());
+                    }
+                }
+                self.available_pr_authors.sort();
+
+                self.all_pull_requests = prs;
+                self.pr_has_next_page = has_next;
+                self.pr_current_page = 1;
+
+                // Apply status filter locally (OR logic handled here)
+                self.apply_pr_filters();
+
+                if !self.pull_requests.is_empty() {
+                    self.pr_list_state.select(Some(0));
+                }
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Failed to load PRs: {}", e));
+            }
+        }
+        self.pr_is_loading = false;
+    }
+
+    /// Apply PR filters to the list (local filtering for status, OR logic)
+    /// Author filter is handled by API when set, so here we only filter status
+    pub fn apply_pr_filters(&mut self) {
+        self.pull_requests = self
+            .all_pull_requests
+            .iter()
+            .filter(|pr| {
+                // Apply status filter (OR logic: matches any selected status)
+                let status_match = self.pr_status_filter.is_empty()
+                    || self.pr_status_filter.iter().any(|s| s.matches(pr));
+
+                // Author filter: if using Search API, all results match
+                // If not using Search API, filter locally
+                let author_match = self.pr_author_filter.is_empty()
+                    || self.pr_author_filter.contains(&pr.author);
+
+                status_match && author_match
+            })
+            .cloned()
+            .collect();
+
+        // Reset selection if out of bounds
+        if let Some(selected) = self.pr_list_state.selected() {
+            if selected >= self.pull_requests.len() {
+                self.pr_list_state.select(if self.pull_requests.is_empty() {
+                    None
+                } else {
+                    Some(self.pull_requests.len() - 1)
+                });
+            }
+        }
+    }
+
+    /// Create worktree for a branch (used for PR checkout)
+    pub fn create_worktree_for_branch(
+        &self,
+        branch: &str,
+    ) -> Result<(std::path::PathBuf, String), String> {
+        let local_path = self.local_path.as_ref().ok_or("No local_path configured")?;
+        let project_name = self.project_name.as_deref().ok_or("No project configured")?;
+        let base_branch = self.base_branch.as_deref();
+
+        crate::agents::create_worktree_with_branch(local_path, project_name, branch, base_branch)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Dispatch agent for a worktree with instructions
+    pub fn dispatch_agent_for_worktree(
+        &self,
+        worktree_path: &std::path::Path,
+        instructions: &str,
+    ) -> Result<String, String> {
+        let session_name = format!("pr-review-{}", uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("unknown"));
+
+        // Launch agent interactively with tmux
+        crate::agents::launch_agent_interactive(
+            worktree_path,
+            &session_name,
+            &self.coding_agent,
+            Some(instructions),
+        )
+        .map_err(|e| e.to_string())?;
+
+        Ok(session_name)
     }
 }
 
@@ -566,7 +898,8 @@ pub async fn run_issue_browser_with_pagination(
     if let (Some(name), Some(path)) = (project_name.clone(), local_path) {
         browser.set_project_info(name, path, base_branch);
     } else if let Some(name) = project_name {
-        browser.project_name = Some(name);
+        browser.project_name = Some(name.clone());
+        browser.current_project = name;
         browser.base_branch = base_branch;
     }
 

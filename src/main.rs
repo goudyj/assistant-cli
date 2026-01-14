@@ -118,6 +118,16 @@ async fn main() {
             labels: None,
         },
         CommandSuggestion {
+            name: "issues".to_string(),
+            description: "Show issues list".to_string(),
+            labels: None,
+        },
+        CommandSuggestion {
+            name: "prs".to_string(),
+            description: "Show pull requests list".to_string(),
+            labels: None,
+        },
+        CommandSuggestion {
             name: "logout".to_string(),
             description: "Logout from GitHub".to_string(),
             labels: None,
@@ -167,7 +177,7 @@ async fn main() {
 
     // Fetch initial issues
     match github
-        .list_issues_paginated(&[], &IssueState::Open, 20, 1)
+        .list_issues_paginated(&[], &IssueState::Open, 100, 1)
         .await
     {
         Ok((issues, has_next_page)) => {

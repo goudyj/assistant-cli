@@ -2,8 +2,10 @@
 
 use std::path::PathBuf;
 
+use std::collections::HashSet;
+
 use crate::agents::WorktreeInfo;
-use crate::github::IssueDetail;
+use crate::github::{IssueDetail, PullRequestDetail, PullRequestSummary};
 use crate::issues::IssueContent;
 use crate::llm;
 
@@ -105,6 +107,41 @@ pub enum TuiView {
     },
     /// Help screen showing all shortcuts
     Help,
+    /// Pull request list view
+    PullRequestList,
+    /// Pull request detail view
+    PullRequestDetail(PullRequestDetail),
+    /// Confirm merge of a pull request
+    ConfirmMerge {
+        pr: PullRequestDetail,
+    },
+    /// Dispatch agent for PR review
+    DispatchPrReview {
+        pr: PullRequestDetail,
+        input: String,
+    },
+    /// PR filters popup
+    PrFilters {
+        status_filter: HashSet<PrStatus>,
+        author_filter: HashSet<String>,
+        available_authors: Vec<String>,
+        focus: PrFilterFocus,
+        selected_status: usize,
+        selected_author: usize,
+        author_input: String,
+        author_suggestions: Vec<String>,
+    },
+    /// Issue filters popup
+    IssueFilters {
+        status_filter: HashSet<IssueStatus>,
+        author_filter: HashSet<String>,
+        available_authors: Vec<String>,
+        focus: IssueFilterFocus,
+        selected_status: usize,
+        selected_author: usize,
+        author_input: String,
+        author_suggestions: Vec<String>,
+    },
 }
 
 /// Stages of issue creation
@@ -122,4 +159,81 @@ pub struct CommandSuggestion {
     pub name: String,
     pub description: String,
     pub labels: Option<Vec<String>>,
+}
+
+/// Pull request status for filtering
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PrStatus {
+    Draft,
+    Open,
+    Merged,
+    Closed,
+}
+
+impl PrStatus {
+    pub fn all() -> Vec<PrStatus> {
+        vec![PrStatus::Draft, PrStatus::Open, PrStatus::Merged, PrStatus::Closed]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            PrStatus::Draft => "Draft",
+            PrStatus::Open => "Open",
+            PrStatus::Merged => "Merged",
+            PrStatus::Closed => "Closed",
+        }
+    }
+
+    /// Check if a PR matches this status
+    pub fn matches(&self, pr: &PullRequestSummary) -> bool {
+        match self {
+            PrStatus::Draft => pr.draft,
+            PrStatus::Open => !pr.draft && pr.state.to_lowercase().contains("open"),
+            PrStatus::Merged => pr.state.to_lowercase().contains("merged"),
+            PrStatus::Closed => !pr.state.to_lowercase().contains("merged")
+                && pr.state.to_lowercase().contains("closed"),
+        }
+    }
+}
+
+/// Focus area in PR filters popup
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrFilterFocus {
+    Status,
+    Author,
+}
+
+/// Issue status for filtering
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IssueStatus {
+    Open,
+    Closed,
+}
+
+impl IssueStatus {
+    pub fn all() -> Vec<IssueStatus> {
+        vec![IssueStatus::Open, IssueStatus::Closed]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            IssueStatus::Open => "Open",
+            IssueStatus::Closed => "Closed",
+        }
+    }
+
+    /// Check if an issue matches this status
+    pub fn matches(&self, issue: &crate::github::IssueSummary) -> bool {
+        match self {
+            IssueStatus::Open => issue.state.to_lowercase().contains("open"),
+            IssueStatus::Closed => issue.state.to_lowercase().contains("closed"),
+        }
+    }
+}
+
+/// Focus area in Issue filters popup
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueFilterFocus {
+    Status,
+    Author,
 }

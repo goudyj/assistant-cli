@@ -18,6 +18,7 @@ pub struct IssueSummary {
     pub labels: Vec<String>,
     pub state: String,
     pub assignees: Vec<String>,
+    pub author: String,
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +39,39 @@ pub struct CommentInfo {
     pub author: String,
     pub body: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PullRequestSummary {
+    pub number: u64,
+    pub title: String,
+    pub html_url: String,
+    pub labels: Vec<String>,
+    pub state: String,
+    pub assignees: Vec<String>,
+    pub author: String,
+    pub draft: bool,
+    pub head_ref: String,
+    pub base_ref: String,
+    pub mergeable: Option<bool>,
+    pub review_decision: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PullRequestDetail {
+    pub number: u64,
+    pub title: String,
+    pub body: Option<String>,
+    pub html_url: String,
+    pub labels: Vec<String>,
+    pub state: String,
+    pub assignees: Vec<String>,
+    pub author: String,
+    pub draft: bool,
+    pub head_ref: String,
+    pub base_ref: String,
+    pub mergeable: Option<bool>,
+    pub comments: Vec<CommentInfo>,
 }
 
 #[derive(Debug)]
@@ -102,6 +136,7 @@ impl GitHubConfig {
             labels: created.labels.iter().map(|l| l.name.clone()).collect(),
             state: "Open".to_string(),
             assignees: created.assignees.iter().map(|a| a.login.clone()).collect(),
+            author: created.user.login.clone(),
         };
 
         Ok((created.html_url.to_string(), summary))
@@ -151,6 +186,7 @@ impl GitHubConfig {
         let issues = page
             .items
             .into_iter()
+            .filter(|issue| issue.pull_request.is_none()) // Exclude PRs
             .map(|issue| IssueSummary {
                 number: issue.number,
                 title: issue.title,
@@ -158,6 +194,7 @@ impl GitHubConfig {
                 labels: issue.labels.iter().map(|l| l.name.clone()).collect(),
                 state: format!("{:?}", issue.state),
                 assignees: issue.assignees.iter().map(|u| u.login.clone()).collect(),
+                author: issue.user.login.clone(),
             })
             .collect();
 
@@ -324,7 +361,7 @@ impl GitHubConfig {
         let page = client
             .search()
             .issues_and_pull_requests(&search_query)
-            .per_page(50)
+            .per_page(100)
             .send()
             .await
             .map_err(Self::map_api_error)?;
@@ -339,10 +376,267 @@ impl GitHubConfig {
                 labels: issue.labels.iter().map(|l| l.name.clone()).collect(),
                 state: format!("{:?}", issue.state),
                 assignees: issue.assignees.iter().map(|u| u.login.clone()).collect(),
+                author: issue.user.login.clone(),
             })
             .collect();
 
         Ok(issues)
+    }
+
+    /// Search issues by authors using GitHub Search API.
+    /// This allows filtering by author and finding older issues.
+    ///
+    /// - `authors`: List of authors to filter by (OR logic - any match)
+    /// - `per_page`: Number of results per page (max 100)
+    /// - `page_num`: Page number (1-indexed)
+    ///
+    /// Returns (issues, has_next_page)
+    pub async fn search_issues_by_authors(
+        &self,
+        authors: &[String],
+        per_page: u8,
+        page_num: u32,
+    ) -> Result<(Vec<IssueSummary>, bool), GitHubError> {
+        let client = self.get_client()?;
+
+        // Build search query: repo:owner/repo is:issue [author:X author:Y ...]
+        let mut query_parts = vec![
+            format!("repo:{}/{}", self.owner, self.repo),
+            "is:issue".to_string(),
+        ];
+
+        // Add author filters - GitHub treats multiple author: as OR
+        for author in authors {
+            query_parts.push(format!("author:{}", author));
+        }
+
+        let search_query = query_parts.join(" ");
+
+        let page = client
+            .search()
+            .issues_and_pull_requests(&search_query)
+            .per_page(per_page)
+            .page(page_num)
+            .send()
+            .await
+            .map_err(Self::map_api_error)?;
+
+        let has_next = page.next.is_some();
+
+        let issues = page
+            .items
+            .into_iter()
+            .map(|issue| IssueSummary {
+                number: issue.number,
+                title: issue.title,
+                html_url: issue.html_url.to_string(),
+                labels: issue.labels.iter().map(|l| l.name.clone()).collect(),
+                state: format!("{:?}", issue.state),
+                assignees: issue.assignees.iter().map(|u| u.login.clone()).collect(),
+                author: issue.user.login.clone(),
+            })
+            .collect();
+
+        Ok((issues, has_next))
+    }
+
+    /// List pull requests with pagination support
+    /// Returns (pull_requests, has_next_page)
+    pub async fn list_pull_requests_paginated(
+        &self,
+        state: &IssueState,
+        per_page: u8,
+        page_num: u32,
+    ) -> Result<(Vec<PullRequestSummary>, bool), GitHubError> {
+        let client = self.get_client()?;
+
+        let octocrab_state = match state {
+            IssueState::Open => octocrab::params::State::Open,
+            IssueState::Closed => octocrab::params::State::Closed,
+            IssueState::All => octocrab::params::State::All,
+        };
+
+        let page = client
+            .pulls(&self.owner, &self.repo)
+            .list()
+            .state(octocrab_state)
+            .per_page(per_page)
+            .page(page_num)
+            .send()
+            .await
+            .map_err(Self::map_api_error)?;
+
+        let has_next = page.next.is_some();
+
+        let prs = page
+            .items
+            .into_iter()
+            .map(|pr| PullRequestSummary {
+                number: pr.number,
+                title: pr.title.unwrap_or_default(),
+                html_url: pr.html_url.map(|u| u.to_string()).unwrap_or_default(),
+                labels: pr.labels.iter().flatten().map(|l| l.name.clone()).collect(),
+                state: format!("{:?}", pr.state.unwrap_or(octocrab::models::IssueState::Open)),
+                assignees: pr.assignees.iter().flatten().map(|u| u.login.clone()).collect(),
+                author: pr.user.map(|u| u.login).unwrap_or_default(),
+                draft: pr.draft.unwrap_or(false),
+                head_ref: pr.head.ref_field,
+                base_ref: pr.base.ref_field,
+                mergeable: pr.mergeable,
+                review_decision: None, // Not available in list API
+            })
+            .collect();
+
+        Ok((prs, has_next))
+    }
+
+    /// Get detailed pull request info
+    pub async fn get_pull_request(&self, number: u64) -> Result<PullRequestDetail, GitHubError> {
+        let client = self.get_client()?;
+
+        let pr = client
+            .pulls(&self.owner, &self.repo)
+            .get(number)
+            .await
+            .map_err(Self::map_api_error)?;
+
+        // Get comments from the PR (uses issues API for comments)
+        let comments_page = client
+            .issues(&self.owner, &self.repo)
+            .list_comments(number)
+            .per_page(50)
+            .send()
+            .await
+            .map_err(Self::map_api_error)?;
+
+        let comments: Vec<CommentInfo> = comments_page
+            .items
+            .into_iter()
+            .map(|c| CommentInfo {
+                id: c.id.into_inner(),
+                author: c.user.login.clone(),
+                body: c.body.unwrap_or_default(),
+                created_at: c.created_at.to_string(),
+            })
+            .collect();
+
+        Ok(PullRequestDetail {
+            number: pr.number,
+            title: pr.title.unwrap_or_default(),
+            body: pr.body,
+            html_url: pr.html_url.map(|u| u.to_string()).unwrap_or_default(),
+            labels: pr.labels.iter().flatten().map(|l| l.name.clone()).collect(),
+            state: format!("{:?}", pr.state.unwrap_or(octocrab::models::IssueState::Open)),
+            assignees: pr.assignees.iter().flatten().map(|u| u.login.clone()).collect(),
+            author: pr.user.map(|u| u.login).unwrap_or_default(),
+            draft: pr.draft.unwrap_or(false),
+            head_ref: pr.head.ref_field,
+            base_ref: pr.base.ref_field,
+            mergeable: pr.mergeable,
+            comments,
+        })
+    }
+
+    /// Merge a pull request
+    pub async fn merge_pull_request(
+        &self,
+        number: u64,
+        commit_title: Option<&str>,
+    ) -> Result<(), GitHubError> {
+        let client = self.get_client()?;
+        let pulls_handler = client.pulls(&self.owner, &self.repo);
+
+        let merge_result = match commit_title {
+            Some(title) => pulls_handler.merge(number).title(title).send().await,
+            None => pulls_handler.merge(number).send().await,
+        };
+
+        merge_result.map_err(Self::map_api_error)?;
+
+        Ok(())
+    }
+
+    /// Search pull requests using GitHub Search API with optional filters.
+    /// This allows filtering by author and finding older PRs that wouldn't appear
+    /// in the regular list API's first pages.
+    ///
+    /// - `authors`: List of authors to filter by (OR logic - any match)
+    /// - `per_page`: Number of results per page (max 100)
+    /// - `page_num`: Page number (1-indexed)
+    ///
+    /// Returns (pull_requests, has_next_page)
+    pub async fn search_pull_requests(
+        &self,
+        authors: &[String],
+        per_page: u8,
+        page_num: u32,
+    ) -> Result<(Vec<PullRequestSummary>, bool), GitHubError> {
+        let client = self.get_client()?;
+
+        // Build search query: repo:owner/repo is:pr [author:X OR author:Y ...]
+        // Note: GitHub Search treats multiple author: as OR
+        let mut query_parts = vec![
+            format!("repo:{}/{}", self.owner, self.repo),
+            "is:pr".to_string(),
+        ];
+
+        // Add author filters - GitHub treats multiple author: as OR
+        for author in authors {
+            query_parts.push(format!("author:{}", author));
+        }
+
+        let search_query = query_parts.join(" ");
+
+        let page = client
+            .search()
+            .issues_and_pull_requests(&search_query)
+            .per_page(per_page)
+            .page(page_num)
+            .send()
+            .await
+            .map_err(Self::map_api_error)?;
+
+        let has_next = page.next.is_some();
+
+        // Convert search results to PullRequestSummary
+        // Note: Search API returns less info than the pulls API
+        let prs = page
+            .items
+            .into_iter()
+            .map(|issue| {
+                // Determine if it's a draft by checking the title/labels
+                // (Search API doesn't directly return draft status)
+                let is_draft = issue.title.starts_with("[WIP]")
+                    || issue.title.starts_with("WIP:")
+                    || issue.title.to_lowercase().starts_with("draft:");
+
+                // Determine merged status from state and closed_at
+                let state_str = if issue.pull_request.is_some() {
+                    // If merged_at is present in the pull_request object, it's merged
+                    // Otherwise use the issue state
+                    format!("{:?}", issue.state)
+                } else {
+                    format!("{:?}", issue.state)
+                };
+
+                PullRequestSummary {
+                    number: issue.number,
+                    title: issue.title,
+                    html_url: issue.html_url.to_string(),
+                    labels: issue.labels.iter().map(|l| l.name.clone()).collect(),
+                    state: state_str,
+                    assignees: issue.assignees.iter().map(|u| u.login.clone()).collect(),
+                    author: issue.user.login.clone(),
+                    draft: is_draft,
+                    head_ref: String::new(), // Not available in search results
+                    base_ref: String::new(), // Not available in search results
+                    mergeable: None,
+                    review_decision: None,
+                }
+            })
+            .collect();
+
+        Ok((prs, has_next))
     }
 
     fn map_api_error(e: octocrab::Error) -> GitHubError {
@@ -399,6 +693,7 @@ mod tests {
             labels: vec!["bug".to_string()],
             state: "Open".to_string(),
             assignees: vec!["user1".to_string()],
+            author: "testuser".to_string(),
         };
         let cloned = summary.clone();
         assert_eq!(cloned.number, 42);
@@ -895,6 +1190,7 @@ mod tests {
                 labels: vec![],
                 state: "Open".to_string(),
                 assignees: vec![],
+                author: "user1".to_string(),
             },
             IssueSummary {
                 number: 2,
@@ -903,6 +1199,7 @@ mod tests {
                 labels: vec![],
                 state: "Open".to_string(),
                 assignees: vec![],
+                author: "user2".to_string(),
             },
             IssueSummary {
                 number: 1, // Duplicate
@@ -911,6 +1208,7 @@ mod tests {
                 labels: vec![],
                 state: "Open".to_string(),
                 assignees: vec![],
+                author: "user1".to_string(),
             },
         ];
 

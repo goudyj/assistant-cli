@@ -6,7 +6,7 @@ use crate::llm;
 use crate::tui::format_comment_with_llm;
 use crate::tui::IssueBrowser;
 use crate::tui_image::display_image;
-use crate::tui_types::{CommandSuggestion, CreateStage, TuiView};
+use crate::tui_types::{CommandSuggestion, CreateStage, IssueFilterFocus, IssueStatus, TuiView};
 use crate::tui_utils::open_url;
 
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -32,11 +32,16 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                 browser.status_message = Some("Press ESC again to quit".to_string());
             }
             KeyCode::Char('q') => browser.should_quit = true,
+            KeyCode::Tab => {
+                // Switch to PR list
+                browser.load_pull_requests().await;
+                browser.view = TuiView::PullRequestList;
+            }
             KeyCode::Down | KeyCode::Char('j') => {
                 browser.next();
                 if let Some(selected) = browser.list_state.selected()
                     && browser.has_next_page
-                    && selected >= browser.issues.len().saturating_sub(5)
+                    && selected >= browser.issues.len().saturating_sub(10)
                 {
                     browser.load_next_page().await;
                 }
@@ -71,7 +76,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                 browser.status_message = Some("Reloading issues...".to_string());
                 if let Ok(issues) = browser
                     .github
-                    .list_issues(&browser.list_labels, &browser.list_state_filter, 50)
+                    .list_issues(&browser.list_labels, &browser.list_state_filter, 100)
                     .await
                 {
                     browser.all_issues = issues.clone();
@@ -354,6 +359,21 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                 browser.status_message = Some("Refreshing...".to_string());
                 browser.reload_issues().await;
                 browser.status_message = Some("Refreshed".to_string());
+            }
+            KeyCode::Char('f') => {
+                // Open issue filters popup
+                let status_filter = browser.issue_status_filter.clone();
+                let available_authors = browser.available_issue_authors.clone();
+                browser.view = TuiView::IssueFilters {
+                    status_filter,
+                    author_filter: browser.issue_author_filter.clone(),
+                    available_authors: available_authors.clone(),
+                    focus: IssueFilterFocus::Status,
+                    selected_status: 0,
+                    selected_author: 0,
+                    author_input: String::new(),
+                    author_suggestions: available_authors,
+                };
             }
             KeyCode::Char('?') => {
                 browser.view = TuiView::Help;
@@ -1122,6 +1142,13 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                             browser.reload_issues().await;
                             browser.status_message = Some("Showing all issues".to_string());
                         }
+                        "issues" => {
+                            browser.view = TuiView::List;
+                        }
+                        "prs" => {
+                            browser.load_pull_requests().await;
+                            browser.view = TuiView::PullRequestList;
+                        }
                         "logout" => {
                             let _ = auth::delete_token();
                             browser.status_message = Some("Logged out.".to_string());
@@ -1750,6 +1777,108 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
             }
             _ => {}
         },
+        TuiView::PullRequestList => {
+            handle_pr_list_key(browser, key).await;
+        }
+        TuiView::PullRequestDetail(pr) => {
+            let pr_clone = pr.clone();
+            handle_pr_detail_key(browser, key, pr_clone).await;
+        }
+        TuiView::ConfirmMerge { pr } => {
+            let pr_clone = pr.clone();
+            handle_confirm_merge_key(browser, key, pr_clone).await;
+        }
+        TuiView::DispatchPrReview { pr, input } => {
+            let pr_clone = pr.clone();
+            let input_clone = input.clone();
+            handle_dispatch_pr_review_key(browser, key, pr_clone, input_clone).await;
+        }
+        TuiView::PrFilters {
+            status_filter,
+            author_filter,
+            available_authors,
+            focus,
+            selected_status,
+            selected_author,
+            author_input,
+            author_suggestions,
+        } => {
+            // Clone the data to avoid borrow issues
+            let mut status_filter = status_filter.clone();
+            let mut author_filter = author_filter.clone();
+            let available_authors = available_authors.clone();
+            let mut focus = *focus;
+            let mut selected_status = *selected_status;
+            let mut selected_author = *selected_author;
+            let mut author_input = author_input.clone();
+            let mut author_suggestions = author_suggestions.clone();
+
+            // Store old author filter to detect changes
+            let old_author_filter = browser.pr_author_filter.clone();
+
+            handle_pr_filters_key_inline(
+                browser,
+                key,
+                &mut status_filter,
+                &mut author_filter,
+                &available_authors,
+                &mut focus,
+                &mut selected_status,
+                &mut selected_author,
+                &mut author_input,
+                &mut author_suggestions,
+            );
+
+            // If author filter changed and we're back to PR list, reload from API
+            if matches!(browser.view, TuiView::PullRequestList)
+                && browser.pr_author_filter != old_author_filter
+            {
+                browser.reload_pull_requests().await;
+            }
+        }
+        TuiView::IssueFilters {
+            status_filter,
+            author_filter,
+            available_authors,
+            focus,
+            selected_status,
+            selected_author,
+            author_input,
+            author_suggestions,
+        } => {
+            // Clone the data to avoid borrow issues
+            let mut status_filter = status_filter.clone();
+            let mut author_filter = author_filter.clone();
+            let available_authors = available_authors.clone();
+            let mut focus = *focus;
+            let mut selected_status = *selected_status;
+            let mut selected_author = *selected_author;
+            let mut author_input = author_input.clone();
+            let mut author_suggestions = author_suggestions.clone();
+
+            // Store old author filter to detect changes
+            let old_author_filter = browser.issue_author_filter.clone();
+
+            handle_issue_filters_key_inline(
+                browser,
+                key,
+                &mut status_filter,
+                &mut author_filter,
+                &available_authors,
+                &mut focus,
+                &mut selected_status,
+                &mut selected_author,
+                &mut author_input,
+                &mut author_suggestions,
+            );
+
+            // If author filter changed and we're back to List, reload from API
+            if matches!(browser.view, TuiView::List)
+                && browser.issue_author_filter != old_author_filter
+            {
+                browser.reload_issues().await;
+            }
+        }
     }
 }
 
@@ -1816,6 +1945,555 @@ pub fn handle_paste(browser: &mut IssueBrowser, content: &str) {
         }
         TuiView::WorktreeAgentInstructions { input, .. } => {
             input.push_str(&clean_content);
+        }
+        TuiView::DispatchPrReview { input, .. } => {
+            input.push_str(&clean_content);
+        }
+        _ => {}
+    }
+}
+
+/// Handle key events in PullRequestList view
+async fn handle_pr_list_key(browser: &mut IssueBrowser, key: KeyCode) {
+    use crate::tui_types::{PrFilterFocus, PrStatus};
+
+    match key {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            browser.view = TuiView::List;
+        }
+        KeyCode::Tab => {
+            browser.view = TuiView::List;
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            browser.pr_next();
+            if let Some(selected) = browser.pr_list_state.selected()
+                && browser.pr_has_next_page
+                && selected >= browser.pull_requests.len().saturating_sub(10)
+            {
+                browser.load_next_pr_page().await;
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            browser.pr_previous();
+        }
+        KeyCode::Enter => {
+            if let Some(pr) = browser.selected_pr() {
+                let number = pr.number;
+                if let Ok(detail) = browser.github.get_pull_request(number).await {
+                    browser.view = TuiView::PullRequestDetail(detail);
+                    browser.scroll_offset = 0;
+                }
+            }
+        }
+        KeyCode::Char('o') => {
+            if let Some(pr) = browser.selected_pr() {
+                open_url(&pr.html_url);
+            }
+        }
+        KeyCode::Char('c') => {
+            // Checkout PR branch as worktree
+            if let Some(pr) = browser.selected_pr() {
+                if browser.local_path.is_none() {
+                    browser.status_message =
+                        Some("No local_path configured for this project.".to_string());
+                    return;
+                }
+                let branch = pr.head_ref.clone();
+                browser.status_message = Some(format!("Creating worktree for branch: {}", branch));
+                // Reuse existing worktree creation logic
+                match browser.create_worktree_for_branch(&branch) {
+                    Ok((path, _)) => {
+                        browser.status_message =
+                            Some(format!("Worktree created at: {}", path.display()));
+                    }
+                    Err(e) => {
+                        browser.status_message = Some(format!("Failed to create worktree: {}", e));
+                    }
+                }
+            }
+        }
+        KeyCode::Char('r') => {
+            // Review PR with agent
+            if let Some(pr) = browser.selected_pr() {
+                let number = pr.number;
+                if let Ok(detail) = browser.github.get_pull_request(number).await {
+                    browser.view = TuiView::DispatchPrReview {
+                        pr: detail,
+                        input: String::new(),
+                    };
+                }
+            }
+        }
+        KeyCode::Char('m') => {
+            // Merge PR
+            if let Some(pr) = browser.selected_pr() {
+                let number = pr.number;
+                if let Ok(detail) = browser.github.get_pull_request(number).await {
+                    if detail.mergeable == Some(false) {
+                        browser.status_message = Some("PR is not mergeable".to_string());
+                    } else {
+                        browser.view = TuiView::ConfirmMerge { pr: detail };
+                    }
+                }
+            }
+        }
+        KeyCode::Char('f') => {
+            // Open filters
+            let mut status_filter = browser.pr_status_filter.clone();
+            if status_filter.is_empty() {
+                status_filter.insert(PrStatus::Open);
+            }
+            let available_authors = browser.available_pr_authors.clone();
+            browser.view = TuiView::PrFilters {
+                status_filter,
+                author_filter: browser.pr_author_filter.clone(),
+                available_authors: available_authors.clone(),
+                focus: PrFilterFocus::Status,
+                selected_status: 0,
+                selected_author: 0,
+                author_input: String::new(),
+                author_suggestions: available_authors,
+            };
+        }
+        KeyCode::Char('?') => {
+            browser.view = TuiView::Help;
+        }
+        _ => {}
+    }
+}
+
+/// Handle key events in PullRequestDetail view
+async fn handle_pr_detail_key(
+    browser: &mut IssueBrowser,
+    key: KeyCode,
+    pr: crate::github::PullRequestDetail,
+) {
+    match key {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            browser.view = TuiView::PullRequestList;
+            browser.scroll_offset = 0;
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            browser.scroll_offset = browser.scroll_offset.saturating_add(1);
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            browser.scroll_offset = browser.scroll_offset.saturating_sub(1);
+        }
+        KeyCode::Char('o') => {
+            open_url(&pr.html_url);
+        }
+        KeyCode::Char('m') => {
+            if pr.mergeable == Some(false) {
+                browser.status_message = Some("PR is not mergeable".to_string());
+            } else {
+                browser.view = TuiView::ConfirmMerge { pr };
+            }
+        }
+        KeyCode::Char('r') => {
+            browser.view = TuiView::DispatchPrReview {
+                pr,
+                input: String::new(),
+            };
+        }
+        _ => {}
+    }
+}
+
+/// Handle key events in ConfirmMerge view
+async fn handle_confirm_merge_key(
+    browser: &mut IssueBrowser,
+    key: KeyCode,
+    pr: crate::github::PullRequestDetail,
+) {
+    match key {
+        KeyCode::Char('y') | KeyCode::Char('Y') => {
+            browser.status_message = Some("Merging PR...".to_string());
+            match browser.github.merge_pull_request(pr.number, None).await {
+                Ok(()) => {
+                    browser.status_message = Some(format!("PR #{} merged!", pr.number));
+                    // Reload PR list
+                    browser.reload_pull_requests().await;
+                    browser.view = TuiView::PullRequestList;
+                }
+                Err(e) => {
+                    browser.status_message = Some(format!("Failed to merge: {}", e));
+                    browser.view = TuiView::PullRequestDetail(pr);
+                }
+            }
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+            browser.view = TuiView::PullRequestDetail(pr);
+        }
+        _ => {}
+    }
+}
+
+/// Handle key events in DispatchPrReview view
+async fn handle_dispatch_pr_review_key(
+    browser: &mut IssueBrowser,
+    key: KeyCode,
+    pr: crate::github::PullRequestDetail,
+    mut input: String,
+) {
+    match key {
+        KeyCode::Esc => {
+            browser.view = TuiView::PullRequestDetail(pr);
+        }
+        KeyCode::Enter => {
+            // Start agent review
+            if browser.local_path.is_none() {
+                browser.status_message =
+                    Some("No local_path configured for this project.".to_string());
+                browser.view = TuiView::PullRequestDetail(pr);
+                return;
+            }
+
+            // Create worktree for PR branch
+            let branch = pr.head_ref.clone();
+            match browser.create_worktree_for_branch(&branch) {
+                Ok((worktree_path, _)) => {
+                    // Build review prompt
+                    let mut review_prompt = format!(
+                        "Review this PR #{}: \"{}\"\n\n",
+                        pr.number, pr.title
+                    );
+                    if let Some(body) = &pr.body {
+                        review_prompt.push_str(&format!("Description:\n{}\n\n", body));
+                    }
+                    review_prompt.push_str(
+                        "Please review the code changes, check for:\n\
+                        - Code quality and best practices\n\
+                        - Potential bugs or edge cases\n\
+                        - Performance concerns\n\
+                        - Security issues\n\n\
+                        Provide a summary of your findings.",
+                    );
+                    if !input.is_empty() {
+                        review_prompt.push_str(&format!("\n\nAdditional instructions:\n{}", input));
+                    }
+
+                    // Launch agent
+                    let project_name = browser.current_project.clone();
+                    match browser.dispatch_agent_for_worktree(&worktree_path, &review_prompt) {
+                        Ok(session_id) => {
+                            browser.status_message =
+                                Some(format!("Started PR review session: {}", session_id));
+                            browser.refresh_sessions(&project_name);
+                        }
+                        Err(e) => {
+                            browser.status_message =
+                                Some(format!("Failed to start agent: {}", e));
+                        }
+                    }
+                    browser.view = TuiView::PullRequestList;
+                }
+                Err(e) => {
+                    browser.status_message = Some(format!("Failed to create worktree: {}", e));
+                    browser.view = TuiView::PullRequestDetail(pr);
+                }
+            }
+        }
+        KeyCode::Char(c) => {
+            input.push(c);
+            browser.view = TuiView::DispatchPrReview { pr, input };
+        }
+        KeyCode::Backspace => {
+            input.pop();
+            browser.view = TuiView::DispatchPrReview { pr, input };
+        }
+        _ => {
+            browser.view = TuiView::DispatchPrReview { pr, input };
+        }
+    }
+}
+
+/// Handle key events in PrFilters view (inline version to avoid borrow issues)
+fn handle_pr_filters_key_inline(
+    browser: &mut IssueBrowser,
+    key: KeyCode,
+    status_filter: &mut std::collections::HashSet<crate::tui_types::PrStatus>,
+    author_filter: &mut std::collections::HashSet<String>,
+    available_authors: &[String],
+    focus: &mut crate::tui_types::PrFilterFocus,
+    selected_status: &mut usize,
+    selected_author: &mut usize,
+    author_input: &mut String,
+    author_suggestions: &mut Vec<String>,
+) {
+    use crate::tui_types::{PrFilterFocus, PrStatus};
+
+    // Helper to update suggestions based on input
+    let update_suggestions = |input: &str, available: &[String]| -> Vec<String> {
+        if input.is_empty() {
+            available.to_vec()
+        } else {
+            let input_lower = input.to_lowercase();
+            available
+                .iter()
+                .filter(|a| a.to_lowercase().contains(&input_lower))
+                .cloned()
+                .collect()
+        }
+    };
+
+    // Helper to build view
+    let build_view = |sf: &std::collections::HashSet<PrStatus>,
+                      af: &std::collections::HashSet<String>,
+                      aa: &[String],
+                      f: PrFilterFocus,
+                      ss: usize,
+                      sa: usize,
+                      ai: String,
+                      asg: Vec<String>| {
+        TuiView::PrFilters {
+            status_filter: sf.clone(),
+            author_filter: af.clone(),
+            available_authors: aa.to_vec(),
+            focus: f,
+            selected_status: ss,
+            selected_author: sa,
+            author_input: ai,
+            author_suggestions: asg,
+        }
+    };
+
+    match key {
+        KeyCode::Esc => {
+            browser.view = TuiView::PullRequestList;
+        }
+        KeyCode::Enter => {
+            // If in author mode with input, add the input or selected suggestion as author
+            if *focus == PrFilterFocus::Author && !author_input.is_empty() {
+                let author_to_add = if !author_suggestions.is_empty() && *selected_author < author_suggestions.len() {
+                    author_suggestions[*selected_author].clone()
+                } else {
+                    author_input.clone()
+                };
+                author_filter.insert(author_to_add);
+                author_input.clear();
+                *author_suggestions = available_authors.to_vec();
+                *selected_author = 0;
+                browser.view = build_view(status_filter, author_filter, available_authors, *focus, *selected_status, *selected_author, author_input.clone(), author_suggestions.clone());
+            } else {
+                // Apply filters and close
+                browser.pr_status_filter = status_filter.clone();
+                browser.pr_author_filter = author_filter.clone();
+                browser.apply_pr_filters();
+                browser.view = TuiView::PullRequestList;
+            }
+        }
+        KeyCode::Tab => {
+            // Switch focus between status and author
+            let new_focus = match focus {
+                PrFilterFocus::Status => PrFilterFocus::Author,
+                PrFilterFocus::Author => PrFilterFocus::Status,
+            };
+            browser.view = build_view(status_filter, author_filter, available_authors, new_focus, *selected_status, *selected_author, author_input.clone(), author_suggestions.clone());
+        }
+        KeyCode::Down => {
+            match focus {
+                PrFilterFocus::Status => {
+                    let max = PrStatus::all().len().saturating_sub(1);
+                    *selected_status = (*selected_status + 1).min(max);
+                }
+                PrFilterFocus::Author => {
+                    let max = author_suggestions.len().saturating_sub(1);
+                    *selected_author = (*selected_author + 1).min(max);
+                }
+            }
+            browser.view = build_view(status_filter, author_filter, available_authors, *focus, *selected_status, *selected_author, author_input.clone(), author_suggestions.clone());
+        }
+        KeyCode::Up => {
+            match focus {
+                PrFilterFocus::Status => {
+                    *selected_status = selected_status.saturating_sub(1);
+                }
+                PrFilterFocus::Author => {
+                    *selected_author = selected_author.saturating_sub(1);
+                }
+            }
+            browser.view = build_view(status_filter, author_filter, available_authors, *focus, *selected_status, *selected_author, author_input.clone(), author_suggestions.clone());
+        }
+        KeyCode::Char(' ') if *focus == PrFilterFocus::Status => {
+            // Toggle status selection
+            let statuses = PrStatus::all();
+            if let Some(status) = statuses.get(*selected_status) {
+                if status_filter.contains(status) {
+                    status_filter.remove(status);
+                } else {
+                    status_filter.insert(*status);
+                }
+            }
+            browser.view = build_view(status_filter, author_filter, available_authors, *focus, *selected_status, *selected_author, author_input.clone(), author_suggestions.clone());
+        }
+        KeyCode::Char(' ') if *focus == PrFilterFocus::Author && author_input.is_empty() => {
+            // Toggle author selection (only when not typing)
+            if let Some(author) = author_suggestions.get(*selected_author) {
+                if author_filter.contains(author) {
+                    author_filter.remove(author);
+                } else {
+                    author_filter.insert(author.clone());
+                }
+            }
+            browser.view = build_view(status_filter, author_filter, available_authors, *focus, *selected_status, *selected_author, author_input.clone(), author_suggestions.clone());
+        }
+        KeyCode::Char(c) if *focus == PrFilterFocus::Author => {
+            // Type character in author input
+            author_input.push(c);
+            *author_suggestions = update_suggestions(author_input, available_authors);
+            *selected_author = 0;
+            browser.view = build_view(status_filter, author_filter, available_authors, *focus, *selected_status, *selected_author, author_input.clone(), author_suggestions.clone());
+        }
+        KeyCode::Backspace if *focus == PrFilterFocus::Author => {
+            author_input.pop();
+            *author_suggestions = update_suggestions(author_input, available_authors);
+            *selected_author = 0;
+            browser.view = build_view(status_filter, author_filter, available_authors, *focus, *selected_status, *selected_author, author_input.clone(), author_suggestions.clone());
+        }
+        _ => {}
+    }
+}
+
+/// Handle key events in IssueFilters view (inline version to avoid borrow issues)
+fn handle_issue_filters_key_inline(
+    browser: &mut IssueBrowser,
+    key: KeyCode,
+    status_filter: &mut std::collections::HashSet<IssueStatus>,
+    author_filter: &mut std::collections::HashSet<String>,
+    available_authors: &[String],
+    focus: &mut IssueFilterFocus,
+    selected_status: &mut usize,
+    selected_author: &mut usize,
+    author_input: &mut String,
+    author_suggestions: &mut Vec<String>,
+) {
+    // Helper to update suggestions based on input
+    let update_suggestions = |input: &str, available: &[String]| -> Vec<String> {
+        if input.is_empty() {
+            available.to_vec()
+        } else {
+            let input_lower = input.to_lowercase();
+            available
+                .iter()
+                .filter(|a| a.to_lowercase().contains(&input_lower))
+                .cloned()
+                .collect()
+        }
+    };
+
+    // Helper to build view
+    let build_view = |sf: &std::collections::HashSet<IssueStatus>,
+                      af: &std::collections::HashSet<String>,
+                      aa: &[String],
+                      f: IssueFilterFocus,
+                      ss: usize,
+                      sa: usize,
+                      ai: String,
+                      asg: Vec<String>| {
+        TuiView::IssueFilters {
+            status_filter: sf.clone(),
+            author_filter: af.clone(),
+            available_authors: aa.to_vec(),
+            focus: f,
+            selected_status: ss,
+            selected_author: sa,
+            author_input: ai,
+            author_suggestions: asg,
+        }
+    };
+
+    match key {
+        KeyCode::Esc => {
+            browser.view = TuiView::List;
+        }
+        KeyCode::Enter => {
+            // If in author mode with input, add the input or selected suggestion as author
+            if *focus == IssueFilterFocus::Author && !author_input.is_empty() {
+                let author_to_add = if !author_suggestions.is_empty() && *selected_author < author_suggestions.len() {
+                    author_suggestions[*selected_author].clone()
+                } else {
+                    author_input.clone()
+                };
+                author_filter.insert(author_to_add);
+                author_input.clear();
+                *author_suggestions = available_authors.to_vec();
+                *selected_author = 0;
+                browser.view = build_view(status_filter, author_filter, available_authors, *focus, *selected_status, *selected_author, author_input.clone(), author_suggestions.clone());
+            } else {
+                // Apply filters and close
+                browser.issue_status_filter = status_filter.clone();
+                browser.issue_author_filter = author_filter.clone();
+                browser.apply_issue_filters();
+                browser.view = TuiView::List;
+            }
+        }
+        KeyCode::Tab => {
+            // Switch focus between status and author
+            let new_focus = match focus {
+                IssueFilterFocus::Status => IssueFilterFocus::Author,
+                IssueFilterFocus::Author => IssueFilterFocus::Status,
+            };
+            browser.view = build_view(status_filter, author_filter, available_authors, new_focus, *selected_status, *selected_author, author_input.clone(), author_suggestions.clone());
+        }
+        KeyCode::Down => {
+            match focus {
+                IssueFilterFocus::Status => {
+                    let max = IssueStatus::all().len().saturating_sub(1);
+                    *selected_status = (*selected_status + 1).min(max);
+                }
+                IssueFilterFocus::Author => {
+                    let max = author_suggestions.len().saturating_sub(1);
+                    *selected_author = (*selected_author + 1).min(max);
+                }
+            }
+            browser.view = build_view(status_filter, author_filter, available_authors, *focus, *selected_status, *selected_author, author_input.clone(), author_suggestions.clone());
+        }
+        KeyCode::Up => {
+            match focus {
+                IssueFilterFocus::Status => {
+                    *selected_status = selected_status.saturating_sub(1);
+                }
+                IssueFilterFocus::Author => {
+                    *selected_author = selected_author.saturating_sub(1);
+                }
+            }
+            browser.view = build_view(status_filter, author_filter, available_authors, *focus, *selected_status, *selected_author, author_input.clone(), author_suggestions.clone());
+        }
+        KeyCode::Char(' ') if *focus == IssueFilterFocus::Status => {
+            // Toggle status selection
+            let statuses = IssueStatus::all();
+            if let Some(status) = statuses.get(*selected_status) {
+                if status_filter.contains(status) {
+                    status_filter.remove(status);
+                } else {
+                    status_filter.insert(*status);
+                }
+            }
+            browser.view = build_view(status_filter, author_filter, available_authors, *focus, *selected_status, *selected_author, author_input.clone(), author_suggestions.clone());
+        }
+        KeyCode::Char(' ') if *focus == IssueFilterFocus::Author && author_input.is_empty() => {
+            // Toggle author selection (only when not typing)
+            if let Some(author) = author_suggestions.get(*selected_author) {
+                if author_filter.contains(author) {
+                    author_filter.remove(author);
+                } else {
+                    author_filter.insert(author.clone());
+                }
+            }
+            browser.view = build_view(status_filter, author_filter, available_authors, *focus, *selected_status, *selected_author, author_input.clone(), author_suggestions.clone());
+        }
+        KeyCode::Char(c) if *focus == IssueFilterFocus::Author => {
+            // Type character in author input
+            author_input.push(c);
+            *author_suggestions = update_suggestions(author_input, available_authors);
+            *selected_author = 0;
+            browser.view = build_view(status_filter, author_filter, available_authors, *focus, *selected_status, *selected_author, author_input.clone(), author_suggestions.clone());
+        }
+        KeyCode::Backspace if *focus == IssueFilterFocus::Author => {
+            author_input.pop();
+            *author_suggestions = update_suggestions(author_input, available_authors);
+            *selected_author = 0;
+            browser.view = build_view(status_filter, author_filter, available_authors, *focus, *selected_status, *selected_author, author_input.clone(), author_suggestions.clone());
         }
         _ => {}
     }

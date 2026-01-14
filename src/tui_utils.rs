@@ -20,6 +20,21 @@ pub fn open_url(url: &str) {
     let _ = open::that(url);
 }
 
+/// Truncate a string to a maximum number of characters, respecting UTF-8 boundaries.
+/// Returns the truncated string. If the string is longer than max_chars, it will be
+/// truncated and "..." will be appended.
+pub fn truncate_str(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        s.to_string()
+    } else if max_chars <= 3 {
+        s.chars().take(max_chars).collect()
+    } else {
+        let truncated: String = s.chars().take(max_chars - 3).collect();
+        format!("{}...", truncated)
+    }
+}
+
 /// Attach to a tmux session, temporarily exiting the TUI
 #[allow(dead_code)]
 pub fn attach_to_tmux_session(session_name: &str) -> io::Result<()> {
@@ -62,5 +77,33 @@ mod tests {
     #[test]
     fn format_date_exactly_ten_chars() {
         assert_eq!(format_date("2024-01-15"), "2024-01-15");
+    }
+
+    #[test]
+    fn truncate_str_short() {
+        assert_eq!(truncate_str("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_str_exact() {
+        assert_eq!(truncate_str("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_str_long() {
+        assert_eq!(truncate_str("hello world", 8), "hello...");
+    }
+
+    #[test]
+    fn truncate_str_utf8() {
+        // Test with UTF-8 characters (French accents, emoji)
+        assert_eq!(truncate_str("héllo wörld", 8), "héllo...");
+        assert_eq!(truncate_str("feature → main", 10), "feature...");
+    }
+
+    #[test]
+    fn truncate_str_very_short_limit() {
+        assert_eq!(truncate_str("hello", 3), "hel");
+        assert_eq!(truncate_str("hello", 2), "he");
     }
 }

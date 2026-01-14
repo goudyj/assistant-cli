@@ -2,11 +2,13 @@
 
 use std::path::Path;
 
-use crate::github::IssueDetail;
+use std::collections::HashSet;
+
+use crate::github::{IssueDetail, PullRequestDetail};
 use crate::issues::IssueContent;
 use crate::markdown::{parse_markdown_content, render_markdown_line};
-use crate::tui_types::{CommandSuggestion, CreateStage, TuiView};
-use crate::tui_utils::format_date;
+use crate::tui_types::{CommandSuggestion, CreateStage, IssueFilterFocus, IssueStatus, PrFilterFocus, PrStatus, TuiView};
+use crate::tui_utils::{format_date, truncate_str};
 
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
@@ -250,6 +252,94 @@ pub fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
         }
         TuiView::Help => {
             draw_help(f);
+        }
+        TuiView::PullRequestList => {
+            if let Some(ref msg) = status_msg {
+                let chunks = Layout::vertical([Constraint::Min(3), Constraint::Length(3)])
+                    .split(f.area());
+                draw_pr_list_view_in_area(f, browser, chunks[0]);
+                draw_status_bar(f, chunks[1], msg);
+            } else {
+                draw_pr_list_view(f, browser);
+            }
+        }
+        TuiView::PullRequestDetail(pr) => {
+            draw_pr_detail_view(f, f.area(), pr, browser.scroll_offset);
+        }
+        TuiView::ConfirmMerge { pr } => {
+            draw_pr_detail_view(f, f.area(), pr, browser.scroll_offset);
+            draw_confirm_merge_popup(f, pr);
+        }
+        TuiView::DispatchPrReview { pr, input } => {
+            // Clone data to avoid borrow issues
+            let pr_clone = pr.clone();
+            let input_clone = input.clone();
+            draw_pr_list_view(f, browser);
+            draw_pr_review_popup(f, &pr_clone, &input_clone);
+        }
+        TuiView::PrFilters {
+            status_filter,
+            author_filter,
+            available_authors,
+            focus,
+            selected_status,
+            selected_author,
+            author_input,
+            author_suggestions,
+        } => {
+            // Clone data to avoid borrow issues
+            let status_filter = status_filter.clone();
+            let author_filter = author_filter.clone();
+            let available_authors = available_authors.clone();
+            let focus = *focus;
+            let selected_status = *selected_status;
+            let selected_author = *selected_author;
+            let author_input = author_input.clone();
+            let author_suggestions = author_suggestions.clone();
+            draw_pr_list_view(f, browser);
+            draw_pr_filters_popup(
+                f,
+                &status_filter,
+                &author_filter,
+                &available_authors,
+                &focus,
+                selected_status,
+                selected_author,
+                &author_input,
+                &author_suggestions,
+            );
+        }
+        TuiView::IssueFilters {
+            status_filter,
+            author_filter,
+            available_authors,
+            focus,
+            selected_status,
+            selected_author,
+            author_input,
+            author_suggestions,
+        } => {
+            // Clone data to avoid borrow issues
+            let status_filter = status_filter.clone();
+            let author_filter = author_filter.clone();
+            let available_authors = available_authors.clone();
+            let focus = *focus;
+            let selected_status = *selected_status;
+            let selected_author = *selected_author;
+            let author_input = author_input.clone();
+            let author_suggestions = author_suggestions.clone();
+            draw_list_view(f, browser);
+            draw_issue_filters_popup(
+                f,
+                &status_filter,
+                &author_filter,
+                &available_authors,
+                &focus,
+                selected_status,
+                selected_author,
+                &author_input,
+                &author_suggestions,
+            );
         }
     }
 }
@@ -689,7 +779,8 @@ pub fn draw_agent_logs(f: &mut Frame, session_id: &str, content: &str, scroll: u
         .map(|line| Line::from(line.to_string()))
         .collect();
 
-    let title = format!(" Agent {} │ ↑↓ scroll │ q back ", &session_id[..8]);
+    let short_id: String = session_id.chars().take(8).collect();
+    let title = format!(" Agent {} │ ↑↓ scroll │ q back ", short_id);
 
     let text = Text::from(lines);
     let paragraph = Paragraph::new(text)
@@ -1558,7 +1649,7 @@ pub fn draw_help(f: &mut Frame) {
 
     let help_text = vec![
         Line::from(vec![
-            Span::styled("LIST VIEW", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("ISSUE LIST", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -1566,6 +1657,7 @@ pub fn draw_help(f: &mut Frame) {
         ]),
         Line::from("    j/↓       Move down"),
         Line::from("    k/↑       Move up"),
+        Line::from("    Tab       Switch to PRs"),
         Line::from("    Enter     Open issue details"),
         Line::from("    s         Search GitHub"),
         Line::from("    /         Open command palette"),
@@ -1621,6 +1713,19 @@ pub fn draw_help(f: &mut Frame) {
         Line::from("    d         Delete worktree"),
         Line::from("    K         Kill tmux session"),
         Line::from("    Esc       Back to list"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("PULL REQUEST LIST", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from("    Tab       Switch to Issues"),
+        Line::from("    Enter     Open PR details"),
+        Line::from("    o         Open in browser"),
+        Line::from("    c         Checkout branch (worktree)"),
+        Line::from("    r         Review with agent"),
+        Line::from("    m         Merge PR"),
+        Line::from("    f         Open filters"),
+        Line::from("    Esc/q     Back to issues"),
     ];
 
     let paragraph = Paragraph::new(help_text).scroll((0, 0));
@@ -1729,4 +1834,624 @@ pub fn draw_worktree_agent_instructions(f: &mut Frame, branch_name: &str, input:
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Center);
     f.render_widget(hint, chunks[1]);
+}
+
+/// Draw the pull request list view (full screen)
+pub fn draw_pr_list_view(f: &mut Frame, browser: &mut IssueBrowser) {
+    let area = f.area();
+    draw_pr_list_view_in_area(f, browser, area);
+}
+
+/// Draw PR list view in a specific area
+pub fn draw_pr_list_view_in_area(f: &mut Frame, browser: &mut IssueBrowser, area: Rect) {
+    let items: Vec<ListItem> = browser
+        .pull_requests
+        .iter()
+        .map(|pr| {
+            let mut spans = Vec::new();
+
+            // PR number
+            spans.push(Span::styled(
+                format!("#{:<5}", pr.number),
+                Style::default().fg(Color::Cyan),
+            ));
+
+            // Status indicator
+            let (status_text, status_style) = if pr.draft {
+                ("DRAFT ", Style::default().fg(Color::DarkGray))
+            } else if pr.state.to_lowercase().contains("merged") {
+                ("MERGED", Style::default().fg(Color::Magenta))
+            } else if pr.state.to_lowercase().contains("closed") {
+                ("CLOSED", Style::default().fg(Color::Red))
+            } else {
+                ("OPEN  ", Style::default().fg(Color::Green))
+            };
+            spans.push(Span::styled(format!("{} ", status_text), status_style));
+
+            // Branches: head → base
+            let branch_text = format!("{} → {}", pr.head_ref, pr.base_ref);
+            let truncated_branch = format!("{:<30}", truncate_str(&branch_text, 27));
+            spans.push(Span::styled(truncated_branch, Style::default().fg(Color::Yellow)));
+
+            // Title (truncated)
+            let max_title_len = area.width.saturating_sub(70) as usize;
+            let title = truncate_str(&pr.title, max_title_len);
+            spans.push(Span::raw(title));
+            spans.push(Span::raw(" "));
+
+            // Author
+            if !pr.author.is_empty() {
+                spans.push(Span::styled(
+                    format!("@{} ", pr.author),
+                    Style::default().fg(Color::Magenta),
+                ));
+            }
+
+            // Review status
+            if let Some(ref review) = pr.review_decision {
+                let (icon, style) = match review.as_str() {
+                    "APPROVED" => ("✓ approved", Style::default().fg(Color::Green)),
+                    "CHANGES_REQUESTED" => ("✗ changes", Style::default().fg(Color::Red)),
+                    _ => ("○ pending", Style::default().fg(Color::Yellow)),
+                };
+                spans.push(Span::styled(icon, style));
+            }
+
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+
+    // Build title with filter indicators
+    let title = build_pr_list_title(browser);
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▶ ");
+
+    f.render_stateful_widget(list, area, &mut browser.pr_list_state);
+}
+
+/// Build the title for PR list with active filters
+fn build_pr_list_title(browser: &IssueBrowser) -> String {
+    let mut parts = vec!["Issues | [PRs]".to_string()];
+
+    // Show active status filters
+    if !browser.pr_status_filter.is_empty() {
+        let statuses: Vec<&str> = browser
+            .pr_status_filter
+            .iter()
+            .map(|s| s.label())
+            .collect();
+        parts.push(format!("[{}]", statuses.join(",")));
+    }
+
+    // Show active author filters
+    if !browser.pr_author_filter.is_empty() {
+        let authors: Vec<String> = browser
+            .pr_author_filter
+            .iter()
+            .map(|a| format!("@{}", a))
+            .collect();
+        parts.push(format!("[{}]", authors.join(",")));
+    }
+
+    // Loading indicator
+    if browser.pr_is_loading {
+        parts.push("[Loading...]".to_string());
+    } else if browser.pr_has_next_page {
+        parts.push(format!("[{} loaded, more available]", browser.pull_requests.len()));
+    } else {
+        parts.push(format!("[{} total]", browser.pull_requests.len()));
+    }
+
+    // Keyboard shortcuts
+    parts.push("│ Tab:issues │ f:filter │ ?:help │ q:quit".to_string());
+
+    format!(" {} ", parts.join(" "))
+}
+
+/// Draw PR detail view
+pub fn draw_pr_detail_view(
+    f: &mut Frame,
+    area: Rect,
+    pr: &PullRequestDetail,
+    scroll: u16,
+) {
+    let mut lines = vec![];
+
+    // Header
+    lines.push(Line::from(vec![
+        Span::styled("PR #", Style::default().fg(Color::Cyan)),
+        Span::styled(
+            pr.number.to_string(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(": "),
+        Span::styled(
+            pr.title.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
+    // Branch info
+    lines.push(Line::from(vec![
+        Span::styled("Branch: ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(&pr.head_ref, Style::default().fg(Color::Yellow)),
+        Span::raw(" → "),
+        Span::styled(&pr.base_ref, Style::default().fg(Color::Green)),
+    ]));
+
+    // Status
+    let (status_text, status_style) = if pr.draft {
+        ("Draft", Style::default().fg(Color::DarkGray))
+    } else if pr.state.to_lowercase().contains("merged") {
+        ("Merged", Style::default().fg(Color::Magenta))
+    } else if pr.state.to_lowercase().contains("closed") {
+        ("Closed", Style::default().fg(Color::Red))
+    } else {
+        ("Open", Style::default().fg(Color::Green))
+    };
+    lines.push(Line::from(vec![
+        Span::styled("Status: ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(status_text, status_style),
+    ]));
+
+    // Author
+    lines.push(Line::from(vec![
+        Span::styled("Author: ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(format!("@{}", pr.author), Style::default().fg(Color::Magenta)),
+    ]));
+
+    // Mergeable status
+    if let Some(mergeable) = pr.mergeable {
+        let (text, style) = if mergeable {
+            ("Yes", Style::default().fg(Color::Green))
+        } else {
+            ("No (conflicts)", Style::default().fg(Color::Red))
+        };
+        lines.push(Line::from(vec![
+            Span::styled("Mergeable: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(text, style),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+
+    // Body
+    if let Some(body) = &pr.body {
+        lines.push(Line::from(Span::styled(
+            "Description:",
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::UNDERLINED),
+        )));
+        lines.push(Line::from(""));
+        let parsed_body = parse_markdown_content(body);
+        for content_line in parsed_body.lines() {
+            lines.push(render_markdown_line(content_line));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // Comments
+    if !pr.comments.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("Comments ({}):", pr.comments.len()),
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::UNDERLINED),
+        )));
+        lines.push(Line::from(""));
+
+        for comment in &pr.comments {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("@{}", comment.author),
+                    Style::default().fg(Color::Magenta),
+                ),
+                Span::styled(
+                    format!(" • {}", format_date(&comment.created_at)),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+            let parsed_comment = parse_markdown_content(&comment.body);
+            for content_line in parsed_comment.lines() {
+                lines.push(render_markdown_line(content_line));
+            }
+            lines.push(Line::from(""));
+        }
+    }
+
+    let title = " PR Detail │ o:browser │ m:merge │ r:review │ Esc:back ";
+    let text = Text::from(lines);
+    let paragraph = Paragraph::new(text)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
+
+    f.render_widget(paragraph, area);
+}
+
+/// Calculate centered rectangle for popups
+fn centered_rect(percent_x: u16, percent_y: u16, outer: Rect) -> Rect {
+    let popup_width = (outer.width * percent_x / 100).max(20).min(outer.width.saturating_sub(4));
+    let popup_height = (outer.height * percent_y / 100).max(5).min(outer.height.saturating_sub(4));
+    let popup_x = (outer.width.saturating_sub(popup_width)) / 2;
+    let popup_y = (outer.height.saturating_sub(popup_height)) / 2;
+    Rect::new(popup_x, popup_y, popup_width, popup_height)
+}
+
+/// Draw merge confirmation popup
+fn draw_confirm_merge_popup(f: &mut Frame, pr: &PullRequestDetail) {
+    let area = centered_rect(60, 30, f.area());
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Confirm Merge ")
+        .style(Style::default().bg(Color::Black));
+
+    let inner = block.inner(area);
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(block, area);
+
+    let text = vec![
+        Line::from(""),
+        Line::from(format!("Merge PR #{}?", pr.number)),
+        Line::from(""),
+        Line::from(pr.title.clone()),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(&pr.head_ref, Style::default().fg(Color::Yellow)),
+            Span::raw(" → "),
+            Span::styled(&pr.base_ref, Style::default().fg(Color::Green)),
+        ]),
+        Line::from(""),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("y", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw(": Yes, merge │ "),
+            Span::styled("n", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw(": No, cancel"),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(text)
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: false });
+    f.render_widget(paragraph, inner);
+}
+
+/// Draw PR review instructions popup
+fn draw_pr_review_popup(f: &mut Frame, pr: &PullRequestDetail, input: &str) {
+    let area = centered_rect(70, 50, f.area());
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Review PR #{}: {} ", pr.number, pr.title))
+        .style(Style::default().bg(Color::Black));
+
+    let inner = block.inner(area);
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(5),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+
+    // Instructions header
+    let header = Paragraph::new("The agent will review this PR for code quality, bugs, and security issues.")
+        .style(Style::default().fg(Color::DarkGray))
+        .wrap(Wrap { trim: false });
+    f.render_widget(header, chunks[0]);
+
+    // Input area
+    let display_text = if input.is_empty() {
+        "Optional: add specific review instructions...".to_string()
+    } else {
+        format!("{}_", input)
+    };
+
+    let style = if input.is_empty() {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let input_paragraph = Paragraph::new(display_text)
+        .style(style)
+        .wrap(Wrap { trim: false });
+    f.render_widget(input_paragraph, chunks[1]);
+
+    // Hint
+    let hint = Paragraph::new("Enter: start review │ Esc: cancel")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    f.render_widget(hint, chunks[2]);
+}
+
+/// Draw PR filters popup
+fn draw_pr_filters_popup(
+    f: &mut Frame,
+    status_filter: &HashSet<PrStatus>,
+    author_filter: &HashSet<String>,
+    _available_authors: &[String],
+    focus: &PrFilterFocus,
+    selected_status: usize,
+    selected_author: usize,
+    author_input: &str,
+    author_suggestions: &[String],
+) {
+    let area = centered_rect(50, 60, f.area());
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" PR Filters ")
+        .style(Style::default().bg(Color::Black));
+
+    let inner = block.inner(area);
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(6),
+        Constraint::Length(1),
+        Constraint::Length(1), // Author input field
+        Constraint::Min(5),    // Author suggestions/selected
+        Constraint::Length(1),
+    ])
+    .split(inner);
+
+    // Status section header
+    let status_header_style = if *focus == PrFilterFocus::Status {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let status_header = Paragraph::new("Status:")
+        .style(status_header_style);
+    f.render_widget(status_header, chunks[0]);
+
+    // Status options
+    let status_items: Vec<ListItem> = PrStatus::all()
+        .iter()
+        .enumerate()
+        .map(|(i, status)| {
+            let checked = if status_filter.contains(status) { "[x]" } else { "[ ]" };
+            let style = if *focus == PrFilterFocus::Status && i == selected_status {
+                Style::default().bg(Color::DarkGray)
+            } else {
+                Style::default()
+            };
+            ListItem::new(format!("{} {}", checked, status.label())).style(style)
+        })
+        .collect();
+
+    let status_list = List::new(status_items);
+    f.render_widget(status_list, chunks[1]);
+
+    // Author section header
+    let author_header_style = if *focus == PrFilterFocus::Author {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let author_header = Paragraph::new("Author:")
+        .style(author_header_style);
+    f.render_widget(author_header, chunks[2]);
+
+    // Author input field
+    let input_style = if *focus == PrFilterFocus::Author {
+        Style::default().fg(Color::White)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let input_text = if author_input.is_empty() && *focus == PrFilterFocus::Author {
+        "Type to search or add author...".to_string()
+    } else if author_input.is_empty() {
+        "".to_string()
+    } else {
+        format!("@{}_", author_input)
+    };
+    let input_paragraph = Paragraph::new(input_text)
+        .style(if author_input.is_empty() && *focus == PrFilterFocus::Author {
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)
+        } else {
+            input_style
+        });
+    f.render_widget(input_paragraph, chunks[3]);
+
+    // Author list: show suggestions if typing, otherwise show selected authors
+    let author_items: Vec<ListItem> = if !author_input.is_empty() {
+        // Show suggestions
+        author_suggestions
+            .iter()
+            .enumerate()
+            .map(|(i, author)| {
+                let checked = if author_filter.contains(author) { "[x]" } else { "[ ]" };
+                let style = if *focus == PrFilterFocus::Author && i == selected_author {
+                    Style::default().bg(Color::DarkGray)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(format!("{} @{}", checked, author)).style(style)
+            })
+            .collect()
+    } else {
+        // Show selected authors + hint to add more
+        let mut items: Vec<ListItem> = author_filter
+            .iter()
+            .enumerate()
+            .map(|(i, author)| {
+                let style = if *focus == PrFilterFocus::Author && i == selected_author {
+                    Style::default().bg(Color::DarkGray)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(format!("[x] @{}", author)).style(style)
+            })
+            .collect();
+        if items.is_empty() {
+            items.push(ListItem::new("No authors selected").style(Style::default().fg(Color::DarkGray)));
+        }
+        items
+    };
+
+    let author_list = List::new(author_items);
+    f.render_widget(author_list, chunks[4]);
+
+    // Hint
+    let hint = Paragraph::new("Tab: switch │ Space: toggle │ Enter: add/apply │ Esc: cancel")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    f.render_widget(hint, chunks[5]);
+}
+
+/// Draw issue filters popup
+fn draw_issue_filters_popup(
+    f: &mut Frame,
+    status_filter: &HashSet<IssueStatus>,
+    author_filter: &HashSet<String>,
+    _available_authors: &[String],
+    focus: &IssueFilterFocus,
+    selected_status: usize,
+    selected_author: usize,
+    author_input: &str,
+    author_suggestions: &[String],
+) {
+    let area = centered_rect(50, 60, f.area());
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Issue Filters ")
+        .style(Style::default().bg(Color::Black));
+
+    let inner = block.inner(area);
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(4), // Status has only 2 options
+        Constraint::Length(1),
+        Constraint::Length(1), // Author input field
+        Constraint::Min(5),    // Author suggestions/selected
+        Constraint::Length(1),
+    ])
+    .split(inner);
+
+    // Status section header
+    let status_header_style = if *focus == IssueFilterFocus::Status {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let status_header = Paragraph::new("Status:")
+        .style(status_header_style);
+    f.render_widget(status_header, chunks[0]);
+
+    // Status options
+    let status_items: Vec<ListItem> = IssueStatus::all()
+        .iter()
+        .enumerate()
+        .map(|(i, status)| {
+            let checked = if status_filter.contains(status) { "[x]" } else { "[ ]" };
+            let style = if *focus == IssueFilterFocus::Status && i == selected_status {
+                Style::default().bg(Color::DarkGray)
+            } else {
+                Style::default()
+            };
+            ListItem::new(format!("{} {}", checked, status.label())).style(style)
+        })
+        .collect();
+
+    let status_list = List::new(status_items);
+    f.render_widget(status_list, chunks[1]);
+
+    // Author section header
+    let author_header_style = if *focus == IssueFilterFocus::Author {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let author_header = Paragraph::new("Author:")
+        .style(author_header_style);
+    f.render_widget(author_header, chunks[2]);
+
+    // Author input field
+    let input_style = if *focus == IssueFilterFocus::Author {
+        Style::default().fg(Color::White)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let input_text = if author_input.is_empty() && *focus == IssueFilterFocus::Author {
+        "Type to search or add author...".to_string()
+    } else if author_input.is_empty() {
+        "".to_string()
+    } else {
+        format!("@{}_", author_input)
+    };
+    let input_paragraph = Paragraph::new(input_text)
+        .style(if author_input.is_empty() && *focus == IssueFilterFocus::Author {
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)
+        } else {
+            input_style
+        });
+    f.render_widget(input_paragraph, chunks[3]);
+
+    // Author list: show suggestions if typing, otherwise show selected authors
+    let author_items: Vec<ListItem> = if !author_input.is_empty() {
+        // Show suggestions
+        author_suggestions
+            .iter()
+            .enumerate()
+            .map(|(i, author)| {
+                let checked = if author_filter.contains(author) { "[x]" } else { "[ ]" };
+                let style = if *focus == IssueFilterFocus::Author && i == selected_author {
+                    Style::default().bg(Color::DarkGray)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(format!("{} @{}", checked, author)).style(style)
+            })
+            .collect()
+    } else {
+        // Show selected authors + hint to add more
+        let mut items: Vec<ListItem> = author_filter
+            .iter()
+            .enumerate()
+            .map(|(i, author)| {
+                let style = if *focus == IssueFilterFocus::Author && i == selected_author {
+                    Style::default().bg(Color::DarkGray)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(format!("[x] @{}", author)).style(style)
+            })
+            .collect();
+        if items.is_empty() {
+            items.push(ListItem::new("No authors selected").style(Style::default().fg(Color::DarkGray)));
+        }
+        items
+    };
+
+    let author_list = List::new(author_items);
+    f.render_widget(author_list, chunks[4]);
+
+    // Hint
+    let hint = Paragraph::new("Tab: switch │ Space: toggle │ Enter: add/apply │ Esc: cancel")
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
+    f.render_widget(hint, chunks[5]);
 }
