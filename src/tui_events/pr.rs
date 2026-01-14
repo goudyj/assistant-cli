@@ -96,13 +96,18 @@ pub async fn handle_pr_list_key(browser: &mut IssueBrowser, key: KeyCode) {
                 status_filter.insert(PrStatus::Open);
             }
             let available_authors = browser.available_pr_authors.clone();
+            // Find index of first selected author to position cursor correctly
+            let selected_author = available_authors
+                .iter()
+                .position(|a| browser.pr_author_filter.contains(a))
+                .unwrap_or(0);
             browser.view = TuiView::PrFilters {
                 status_filter,
                 author_filter: browser.pr_author_filter.clone(),
                 available_authors: available_authors.clone(),
                 focus: PrFilterFocus::Status,
                 selected_status: 0,
-                selected_author: 0,
+                selected_author,
                 author_input: String::new(),
                 author_suggestions: available_authors,
             };

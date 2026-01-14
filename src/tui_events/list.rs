@@ -145,13 +145,18 @@ pub async fn handle_list_key(browser: &mut IssueBrowser, key: KeyCode) {
             // Open issue filters popup
             let status_filter = browser.issue_status_filter.clone();
             let available_authors = browser.available_issue_authors.clone();
+            // Find index of first selected author to position cursor correctly
+            let selected_author = available_authors
+                .iter()
+                .position(|a| browser.issue_author_filter.contains(a))
+                .unwrap_or(0);
             browser.view = TuiView::IssueFilters {
                 status_filter,
                 author_filter: browser.issue_author_filter.clone(),
                 available_authors: available_authors.clone(),
                 focus: IssueFilterFocus::Status,
                 selected_status: 0,
-                selected_author: 0,
+                selected_author,
                 author_input: String::new(),
                 author_suggestions: available_authors,
             };
