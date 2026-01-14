@@ -55,8 +55,8 @@ pub fn handle_pr_filters_key(
             browser.view = TuiView::PullRequestList;
         }
         KeyCode::Enter => {
+            // If typing an author, add it first
             if *focus == PrFilterFocus::Author && !author_input.is_empty() {
-                // Add author from search input and apply immediately
                 let author_to_add = if !author_suggestions.is_empty()
                     && *selected_author < author_suggestions.len()
                 {
@@ -66,33 +66,12 @@ pub fn handle_pr_filters_key(
                 };
                 author_filter.clear();
                 author_filter.insert(author_to_add);
-                // Apply filters and close
-                browser.pr_status_filter = status_filter.clone();
-                browser.pr_author_filter = author_filter.clone();
-                browser.apply_pr_filters();
-                browser.view = TuiView::PullRequestList;
-            } else if *focus == PrFilterFocus::Author && author_input.is_empty() {
-                // Single-select author: toggle and apply immediately
-                if let Some(author) = author_suggestions.get(*selected_author) {
-                    if author_filter.contains(author) {
-                        author_filter.clear();
-                    } else {
-                        author_filter.clear();
-                        author_filter.insert(author.clone());
-                    }
-                }
-                // Apply filters and close
-                browser.pr_status_filter = status_filter.clone();
-                browser.pr_author_filter = author_filter.clone();
-                browser.apply_pr_filters();
-                browser.view = TuiView::PullRequestList;
-            } else {
-                // Apply filters and close
-                browser.pr_status_filter = status_filter.clone();
-                browser.pr_author_filter = author_filter.clone();
-                browser.apply_pr_filters();
-                browser.view = TuiView::PullRequestList;
             }
+            // Apply filters and close
+            browser.pr_status_filter = status_filter.clone();
+            browser.pr_author_filter = author_filter.clone();
+            browser.apply_pr_filters();
+            browser.view = TuiView::PullRequestList;
         }
         KeyCode::Tab => {
             let new_focus = match focus {
@@ -173,7 +152,7 @@ pub fn handle_pr_filters_key(
             );
         }
         KeyCode::Char(' ') if *focus == PrFilterFocus::Author && author_input.is_empty() => {
-            // Single-select author: toggle and apply immediately
+            // Single-select author: toggle (deselect previous if selecting new)
             if let Some(author) = author_suggestions.get(*selected_author) {
                 if author_filter.contains(author) {
                     author_filter.clear();
@@ -182,11 +161,17 @@ pub fn handle_pr_filters_key(
                     author_filter.insert(author.clone());
                 }
             }
-            // Apply filters and close
-            browser.pr_status_filter = status_filter.clone();
-            browser.pr_author_filter = author_filter.clone();
-            browser.apply_pr_filters();
-            browser.view = TuiView::PullRequestList;
+            // Stay in popup
+            browser.view = build_view(
+                status_filter,
+                author_filter,
+                available_authors,
+                *focus,
+                *selected_status,
+                *selected_author,
+                author_input.clone(),
+                author_suggestions.clone(),
+            );
         }
         KeyCode::Char(c) if *focus == PrFilterFocus::Author => {
             author_input.push(c);
@@ -259,8 +244,8 @@ pub fn handle_issue_filters_key(
             browser.view = TuiView::List;
         }
         KeyCode::Enter => {
+            // If typing an author, add it first
             if *focus == IssueFilterFocus::Author && !author_input.is_empty() {
-                // Add author from search input and apply immediately
                 let author_to_add = if !author_suggestions.is_empty()
                     && *selected_author < author_suggestions.len()
                 {
@@ -270,33 +255,12 @@ pub fn handle_issue_filters_key(
                 };
                 author_filter.clear();
                 author_filter.insert(author_to_add);
-                // Apply filters and close
-                browser.issue_status_filter = status_filter.clone();
-                browser.issue_author_filter = author_filter.clone();
-                browser.apply_issue_filters();
-                browser.view = TuiView::List;
-            } else if *focus == IssueFilterFocus::Author && author_input.is_empty() {
-                // Single-select author: toggle and apply immediately
-                if let Some(author) = author_suggestions.get(*selected_author) {
-                    if author_filter.contains(author) {
-                        author_filter.clear();
-                    } else {
-                        author_filter.clear();
-                        author_filter.insert(author.clone());
-                    }
-                }
-                // Apply filters and close
-                browser.issue_status_filter = status_filter.clone();
-                browser.issue_author_filter = author_filter.clone();
-                browser.apply_issue_filters();
-                browser.view = TuiView::List;
-            } else {
-                // Apply filters and close
-                browser.issue_status_filter = status_filter.clone();
-                browser.issue_author_filter = author_filter.clone();
-                browser.apply_issue_filters();
-                browser.view = TuiView::List;
             }
+            // Apply filters and close
+            browser.issue_status_filter = status_filter.clone();
+            browser.issue_author_filter = author_filter.clone();
+            browser.apply_issue_filters();
+            browser.view = TuiView::List;
         }
         KeyCode::Tab => {
             let new_focus = match focus {
@@ -377,7 +341,7 @@ pub fn handle_issue_filters_key(
             );
         }
         KeyCode::Char(' ') if *focus == IssueFilterFocus::Author && author_input.is_empty() => {
-            // Single-select author: toggle and apply immediately
+            // Single-select author: toggle (deselect previous if selecting new)
             if let Some(author) = author_suggestions.get(*selected_author) {
                 if author_filter.contains(author) {
                     author_filter.clear();
@@ -386,11 +350,17 @@ pub fn handle_issue_filters_key(
                     author_filter.insert(author.clone());
                 }
             }
-            // Apply filters and close
-            browser.issue_status_filter = status_filter.clone();
-            browser.issue_author_filter = author_filter.clone();
-            browser.apply_issue_filters();
-            browser.view = TuiView::List;
+            // Stay in popup
+            browser.view = build_view(
+                status_filter,
+                author_filter,
+                available_authors,
+                *focus,
+                *selected_status,
+                *selected_author,
+                author_input.clone(),
+                author_suggestions.clone(),
+            );
         }
         KeyCode::Char(c) if *focus == IssueFilterFocus::Author => {
             author_input.push(c);
