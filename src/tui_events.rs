@@ -963,29 +963,25 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
             let has_modifier =
                 modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::SUPER);
 
-            if key == KeyCode::Esc {
-                // Double-ESC to exit embedded terminal, single ESC passes through to tmux
-                if let Some(last_press) = browser.last_esc_press
-                    && last_press.elapsed() < std::time::Duration::from_millis(500)
-                {
-                    browser.embedded_term = None;
-                    browser.last_esc_press = None;
-                    if *return_to_worktrees {
-                        let worktrees = browser.build_worktree_list();
-                        browser.view = TuiView::WorktreeList {
-                            worktrees,
-                            selected: 0,
-                        };
-                    } else {
-                        browser.view = TuiView::List;
-                    }
-                    if let Some(project) = browser.project_name.clone() {
-                        browser.refresh_sessions_with_fresh_stats(&project);
-                    }
-                    return;
+            if key == KeyCode::Char('q') && modifiers.contains(KeyModifiers::CONTROL) {
+                // Ctrl+Q to exit embedded terminal
+                browser.embedded_term = None;
+                browser.last_esc_press = None;
+                if *return_to_worktrees {
+                    let worktrees = browser.build_worktree_list();
+                    browser.view = TuiView::WorktreeList {
+                        worktrees,
+                        selected: 0,
+                    };
+                } else {
+                    browser.view = TuiView::List;
                 }
-                browser.last_esc_press = Some(std::time::Instant::now());
-                // Pass ESC to the terminal
+                if let Some(project) = browser.project_name.clone() {
+                    browser.refresh_sessions_with_fresh_stats(&project);
+                }
+                return;
+            } else if key == KeyCode::Esc {
+                // Single ESC passes through to tmux
                 if let Some(ref term) = browser.embedded_term {
                     term.send_input(&[0x1b]); // ESC byte
                 }
