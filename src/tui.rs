@@ -139,6 +139,15 @@ impl IssueBrowser {
         if !issues.is_empty() {
             list_state.select(Some(0));
         }
+        // Extract unique authors from initial issues
+        let mut available_issue_authors: Vec<String> = issues
+            .iter()
+            .map(|i| i.author.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        available_issue_authors.sort();
+
         Self {
             all_issues: issues.clone(),
             issues,
@@ -185,7 +194,7 @@ impl IssueBrowser {
             available_pr_authors: Vec::new(),
             issue_status_filter: std::collections::HashSet::new(),
             issue_author_filter: std::collections::HashSet::new(),
-            available_issue_authors: Vec::new(),
+            available_issue_authors,
         }
     }
 

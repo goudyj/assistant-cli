@@ -79,11 +79,12 @@ pub fn handle_pr_filters_key(
                     author_suggestions.clone(),
                 );
             } else if *focus == PrFilterFocus::Author && author_input.is_empty() {
-                // Toggle author selection with Enter (same as Space)
+                // Single-select author: toggle off if selected, or replace selection
                 if let Some(author) = author_suggestions.get(*selected_author) {
                     if author_filter.contains(author) {
-                        author_filter.remove(author);
+                        author_filter.clear();
                     } else {
+                        author_filter.clear();
                         author_filter.insert(author.clone());
                     }
                 }
@@ -184,10 +185,12 @@ pub fn handle_pr_filters_key(
             );
         }
         KeyCode::Char(' ') if *focus == PrFilterFocus::Author && author_input.is_empty() => {
+            // Single-select author: toggle off if selected, or replace selection
             if let Some(author) = author_suggestions.get(*selected_author) {
                 if author_filter.contains(author) {
-                    author_filter.remove(author);
+                    author_filter.clear();
                 } else {
+                    author_filter.clear();
                     author_filter.insert(author.clone());
                 }
             }
@@ -297,11 +300,12 @@ pub fn handle_issue_filters_key(
                     author_suggestions.clone(),
                 );
             } else if *focus == IssueFilterFocus::Author && author_input.is_empty() {
-                // Toggle author selection with Enter (same as Space)
+                // Single-select author: toggle off if selected, or replace selection
                 if let Some(author) = author_suggestions.get(*selected_author) {
                     if author_filter.contains(author) {
-                        author_filter.remove(author);
+                        author_filter.clear();
                     } else {
+                        author_filter.clear();
                         author_filter.insert(author.clone());
                     }
                 }
@@ -402,10 +406,12 @@ pub fn handle_issue_filters_key(
             );
         }
         KeyCode::Char(' ') if *focus == IssueFilterFocus::Author && author_input.is_empty() => {
+            // Single-select author: toggle off if selected, or replace selection
             if let Some(author) = author_suggestions.get(*selected_author) {
                 if author_filter.contains(author) {
-                    author_filter.remove(author);
+                    author_filter.clear();
                 } else {
+                    author_filter.clear();
                     author_filter.insert(author.clone());
                 }
             }
