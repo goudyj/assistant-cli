@@ -194,6 +194,27 @@ impl PrStatus {
                 && pr.state.to_lowercase().contains("closed"),
         }
     }
+
+    /// Convert a set of PR status filters to the best API state for fetching
+    /// - If only open-like statuses (Draft, Open) → IssueState::Open
+    /// - If only closed-like statuses (Merged, Closed) → IssueState::Closed
+    /// - Otherwise (mixed or empty) → IssueState::All
+    pub fn to_api_state(filters: &std::collections::HashSet<PrStatus>) -> crate::list::IssueState {
+        use crate::list::IssueState;
+
+        if filters.is_empty() {
+            return IssueState::All;
+        }
+
+        let has_open = filters.contains(&PrStatus::Open) || filters.contains(&PrStatus::Draft);
+        let has_closed = filters.contains(&PrStatus::Merged) || filters.contains(&PrStatus::Closed);
+
+        match (has_open, has_closed) {
+            (true, false) => IssueState::Open,
+            (false, true) => IssueState::Closed,
+            _ => IssueState::All,
+        }
+    }
 }
 
 /// Focus area in PR filters popup

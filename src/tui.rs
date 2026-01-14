@@ -634,10 +634,18 @@ impl IssueBrowser {
             return; // Already loaded
         }
 
+        // Set default filter before fetching (Open only)
+        if self.pr_status_filter.is_empty() {
+            self.pr_status_filter.insert(PrStatus::Open);
+        }
+
+        // Use the status filter to determine API state
+        let api_state = PrStatus::to_api_state(&self.pr_status_filter);
+
         self.pr_is_loading = true;
         match self
             .github
-            .list_pull_requests_paginated(&crate::list::IssueState::All, 100, 1)
+            .list_pull_requests_paginated(&api_state, 100, 1)
             .await
         {
             Ok((prs, has_next)) => {
@@ -652,10 +660,6 @@ impl IssueBrowser {
                 self.pr_has_next_page = has_next;
                 self.pr_current_page = 1;
 
-                // Apply default filter (Open only)
-                if self.pr_status_filter.is_empty() {
-                    self.pr_status_filter.insert(PrStatus::Open);
-                }
                 self.apply_pr_filters();
 
                 if !self.pull_requests.is_empty() {
@@ -678,15 +682,16 @@ impl IssueBrowser {
 
         self.pr_is_loading = true;
         let next_page = self.pr_current_page + 1;
+        let api_state = PrStatus::to_api_state(&self.pr_status_filter);
 
         let result = if !self.pr_author_filter.is_empty() {
             // Use Search API for author filtering
             let authors: Vec<String> = self.pr_author_filter.iter().cloned().collect();
             self.github.search_pull_requests(&authors, 100, next_page).await
         } else {
-            // Use List API
+            // Use List API with status filter
             self.github
-                .list_pull_requests_paginated(&crate::list::IssueState::All, 100, next_page)
+                .list_pull_requests_paginated(&api_state, 100, next_page)
                 .await
         };
 
@@ -723,14 +728,16 @@ impl IssueBrowser {
         self.pr_list_state.select(None);
         self.pr_is_loading = true;
 
+        let api_state = PrStatus::to_api_state(&self.pr_status_filter);
+
         let result = if !self.pr_author_filter.is_empty() {
             // Use Search API for author filtering (finds older PRs)
             let authors: Vec<String> = self.pr_author_filter.iter().cloned().collect();
             self.github.search_pull_requests(&authors, 100, 1).await
         } else {
-            // Use List API for no author filter (faster, more info)
+            // Use List API with status filter
             self.github
-                .list_pull_requests_paginated(&crate::list::IssueState::All, 100, 1)
+                .list_pull_requests_paginated(&api_state, 100, 1)
                 .await
         };
 
@@ -748,7 +755,7 @@ impl IssueBrowser {
                 self.pr_has_next_page = has_next;
                 self.pr_current_page = 1;
 
-                // Apply status filter locally (OR logic handled here)
+                // Apply status filter locally (for Draft/Merged distinction)
                 self.apply_pr_filters();
 
                 if !self.pull_requests.is_empty() {
