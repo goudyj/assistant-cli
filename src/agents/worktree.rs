@@ -31,22 +31,105 @@ impl From<std::io::Error> for WorktreeError {
 
 /// Detect the default branch for a repository (main, master, or develop).
 fn detect_default_branch(local_path: &Path) -> Option<String> {
-    // Try common default branch names in order of preference
-    for branch in ["main", "master", "develop"] {
-        // Check if origin/<branch> exists
-        let output = Command::new("git")
-            .current_dir(local_path)
-            .args(["rev-parse", "--verify", &format!("origin/{}", branch)])
-            .output()
-            .ok();
+    ["main", "master", "develop"]
+        .iter()
+        .find(|branch| {
+            Command::new("git")
+                .current_dir(local_path)
+                .args(["rev-parse", "--verify", &format!("origin/{}", branch)])
+                .output()
+                .is_ok_and(|o| o.status.success())
+        })
+        .map(|s| s.to_string())
+}
 
-        if let Some(output) = output {
-            if output.status.success() {
-                return Some(branch.to_string());
-            }
-        }
+/// Validate that a path is a git repository with at least one commit.
+fn validate_git_repo(local_path: &Path) -> Result<(), WorktreeError> {
+    if !local_path.exists() {
+        return Err(WorktreeError::GitError(format!(
+            "Path does not exist: {}",
+            local_path.display()
+        )));
     }
-    None
+
+    let is_git_repo = Command::new("git")
+        .current_dir(local_path)
+        .args(["rev-parse", "--git-dir"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+
+    if !is_git_repo {
+        return Err(WorktreeError::GitError(format!(
+            "Not a git repository: {}. Run 'git init' or clone a repo.",
+            local_path.display()
+        )));
+    }
+
+    let has_commits = Command::new("git")
+        .current_dir(local_path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+
+    if !has_commits {
+        return Err(WorktreeError::GitError(
+            "Repository has no commits. Create at least one commit first.".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Create a branch from a base reference if it doesn't exist.
+fn ensure_branch_exists(
+    local_path: &Path,
+    branch_name: &str,
+    base_branch: Option<&str>,
+) -> Result<(), WorktreeError> {
+    // Detect or use provided base branch
+    let detected_base = base_branch
+        .map(|s| s.to_string())
+        .or_else(|| detect_default_branch(local_path));
+
+    // Fetch the latest from origin before creating the branch
+    if let Some(ref base) = detected_base {
+        let _ = Command::new("git")
+            .current_dir(local_path)
+            .args(["fetch", "origin", base])
+            .output();
+    }
+
+    // Check if branch already exists
+    let branch_exists = Command::new("git")
+        .current_dir(local_path)
+        .args(["rev-parse", "--verify", branch_name])
+        .output()
+        .is_ok_and(|o| o.status.success());
+
+    if branch_exists {
+        return Ok(());
+    }
+
+    // Determine the base ref: prefer origin/<base_branch>, fallback to HEAD
+    let base_ref = detected_base
+        .as_ref()
+        .map(|b| format!("origin/{}", b))
+        .unwrap_or_else(|| "HEAD".to_string());
+
+    // Create branch from base ref
+    let output = Command::new("git")
+        .current_dir(local_path)
+        .args(["branch", branch_name, &base_ref])
+        .output()?;
+
+    if !output.status.success() {
+        return Err(WorktreeError::GitError(format!(
+            "Failed to create branch: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    Ok(())
 }
 
 /// Create a git worktree for an issue.
@@ -67,117 +150,9 @@ pub fn create_worktree(
     issue_number: u64,
     base_branch: Option<&str>,
 ) -> Result<(PathBuf, String), WorktreeError> {
-    // Verify local_path exists
-    if !local_path.exists() {
-        return Err(WorktreeError::GitError(format!(
-            "Path does not exist: {}",
-            local_path.display()
-        )));
-    }
-
-    // Verify it's a git repository
-    let is_git_repo = Command::new("git")
-        .current_dir(local_path)
-        .args(["rev-parse", "--git-dir"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if !is_git_repo {
-        return Err(WorktreeError::GitError(format!(
-            "Not a git repository: {}. Run 'git init' or clone a repo.",
-            local_path.display()
-        )));
-    }
-
-    // Verify there's at least one commit
-    let has_commits = Command::new("git")
-        .current_dir(local_path)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if !has_commits {
-        return Err(WorktreeError::GitError(
-            "Repository has no commits. Create at least one commit first.".to_string(),
-        ));
-    }
-
-    // Detect or use provided base branch
-    let detected_base = base_branch
-        .map(|s| s.to_string())
-        .or_else(|| detect_default_branch(local_path));
-
     let branch_name = format!("issue-{}", issue_number);
     let worktree_name = format!("{}-{}", project, issue_number);
-    let worktree_path = worktrees_dir().join(&worktree_name);
-
-    // Ensure worktrees directory exists
-    std::fs::create_dir_all(worktrees_dir())?;
-
-    // Check if worktree already exists
-    if worktree_path.exists() {
-        // Worktree already exists, just return it
-        return Ok((worktree_path, branch_name));
-    }
-
-    // Fetch the latest from origin before creating the branch
-    if let Some(ref base) = detected_base {
-        let _ = Command::new("git")
-            .current_dir(local_path)
-            .args(["fetch", "origin", base])
-            .output();
-    }
-
-    // Check if branch already exists
-    let branch_exists = Command::new("git")
-        .current_dir(local_path)
-        .args(["rev-parse", "--verify", &branch_name])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if !branch_exists {
-        // Determine the base ref: prefer origin/<base_branch>, fallback to HEAD
-        let base_ref = detected_base
-            .as_ref()
-            .map(|b| format!("origin/{}", b))
-            .unwrap_or_else(|| "HEAD".to_string());
-
-        // Create branch from base ref
-        let output = Command::new("git")
-            .current_dir(local_path)
-            .args(["branch", &branch_name, &base_ref])
-            .output()?;
-
-        if !output.status.success() {
-            return Err(WorktreeError::GitError(format!(
-                "Failed to create branch: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )));
-        }
-    }
-
-    // Create the worktree
-    let output = Command::new("git")
-        .current_dir(local_path)
-        .args([
-            "worktree",
-            "add",
-            worktree_path.to_str().unwrap(),
-            &branch_name,
-        ])
-        .output()?;
-
-    if !output.status.success() {
-        return Err(WorktreeError::GitError(format!(
-            "Failed to create worktree: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-
-    Ok((worktree_path, branch_name))
+    create_worktree_impl(local_path, &branch_name, &worktree_name, base_branch)
 }
 
 /// Create a git worktree with a custom branch name.
@@ -198,52 +173,22 @@ pub fn create_worktree_with_branch(
     branch_name: &str,
     base_branch: Option<&str>,
 ) -> Result<(PathBuf, String), WorktreeError> {
-    // Verify local_path exists
-    if !local_path.exists() {
-        return Err(WorktreeError::GitError(format!(
-            "Path does not exist: {}",
-            local_path.display()
-        )));
-    }
-
-    // Verify it's a git repository
-    let is_git_repo = Command::new("git")
-        .current_dir(local_path)
-        .args(["rev-parse", "--git-dir"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if !is_git_repo {
-        return Err(WorktreeError::GitError(format!(
-            "Not a git repository: {}. Run 'git init' or clone a repo.",
-            local_path.display()
-        )));
-    }
-
-    // Verify there's at least one commit
-    let has_commits = Command::new("git")
-        .current_dir(local_path)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if !has_commits {
-        return Err(WorktreeError::GitError(
-            "Repository has no commits. Create at least one commit first.".to_string(),
-        ));
-    }
-
-    // Detect or use provided base branch
-    let detected_base = base_branch
-        .map(|s| s.to_string())
-        .or_else(|| detect_default_branch(local_path));
-
     // Sanitize branch name for directory (replace / with -)
     let sanitized_name = branch_name.replace('/', "-");
     let worktree_name = format!("{}-{}", project, sanitized_name);
-    let worktree_path = worktrees_dir().join(&worktree_name);
+    create_worktree_impl(local_path, branch_name, &worktree_name, base_branch)
+}
+
+/// Shared implementation for creating worktrees.
+fn create_worktree_impl(
+    local_path: &Path,
+    branch_name: &str,
+    worktree_name: &str,
+    base_branch: Option<&str>,
+) -> Result<(PathBuf, String), WorktreeError> {
+    validate_git_repo(local_path)?;
+
+    let worktree_path = worktrees_dir().join(worktree_name);
 
     // Ensure worktrees directory exists
     std::fs::create_dir_all(worktrees_dir())?;
@@ -253,42 +198,8 @@ pub fn create_worktree_with_branch(
         return Ok((worktree_path, branch_name.to_string()));
     }
 
-    // Fetch the latest from origin before creating the branch
-    if let Some(ref base) = detected_base {
-        let _ = Command::new("git")
-            .current_dir(local_path)
-            .args(["fetch", "origin", base])
-            .output();
-    }
-
-    // Check if branch already exists
-    let branch_exists = Command::new("git")
-        .current_dir(local_path)
-        .args(["rev-parse", "--verify", branch_name])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if !branch_exists {
-        // Determine the base ref: prefer origin/<base_branch>, fallback to HEAD
-        let base_ref = detected_base
-            .as_ref()
-            .map(|b| format!("origin/{}", b))
-            .unwrap_or_else(|| "HEAD".to_string());
-
-        // Create branch from base ref
-        let output = Command::new("git")
-            .current_dir(local_path)
-            .args(["branch", branch_name, &base_ref])
-            .output()?;
-
-        if !output.status.success() {
-            return Err(WorktreeError::GitError(format!(
-                "Failed to create branch: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )));
-        }
-    }
+    // Create branch if needed
+    ensure_branch_exists(local_path, branch_name, base_branch)?;
 
     // Create the worktree
     let output = Command::new("git")
@@ -421,24 +332,16 @@ pub fn get_diff_stats(worktree_path: &Path) -> (usize, usize, usize) {
 
 /// Find the merge-base commit with the default branch.
 fn find_merge_base(worktree_path: &Path) -> Option<String> {
-    // Try common default branch names in order of preference
-    for branch in ["main", "master", "develop"] {
-        let output = Command::new("git")
+    ["main", "master", "develop"].iter().find_map(|branch| {
+        Command::new("git")
             .current_dir(worktree_path)
             .args(["merge-base", "HEAD", branch])
             .output()
-            .ok();
-
-        if let Some(output) = output
-            && output.status.success()
-        {
-            let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !commit.is_empty() {
-                return Some(commit);
-            }
-        }
-    }
-    None
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+    })
 }
 
 /// Parse git diff --numstat output into (lines_added, lines_deleted, files_changed).

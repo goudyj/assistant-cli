@@ -163,17 +163,11 @@ impl GitHubConfig {
     ) -> Result<(Vec<IssueSummary>, bool), GitHubError> {
         let client = self.get_client()?;
 
-        let octocrab_state = match state {
-            IssueState::Open => octocrab::params::State::Open,
-            IssueState::Closed => octocrab::params::State::Closed,
-            IssueState::All => octocrab::params::State::All,
-        };
-
         let page = client
             .issues(&self.owner, &self.repo)
             .list()
             .labels(labels)
-            .state(octocrab_state)
+            .state(Self::to_octocrab_state(state))
             .per_page(per_page)
             .page(page_num)
             .send()
@@ -450,16 +444,10 @@ impl GitHubConfig {
     ) -> Result<(Vec<PullRequestSummary>, bool), GitHubError> {
         let client = self.get_client()?;
 
-        let octocrab_state = match state {
-            IssueState::Open => octocrab::params::State::Open,
-            IssueState::Closed => octocrab::params::State::Closed,
-            IssueState::All => octocrab::params::State::All,
-        };
-
         let page = client
             .pulls(&self.owner, &self.repo)
             .list()
-            .state(octocrab_state)
+            .state(Self::to_octocrab_state(state))
             .per_page(per_page)
             .page(page_num)
             .send()
@@ -645,6 +633,15 @@ impl GitHubConfig {
             GitHubError::TokenExpired
         } else {
             GitHubError::ApiError(msg)
+        }
+    }
+
+    /// Convert IssueState to octocrab State
+    fn to_octocrab_state(state: &IssueState) -> octocrab::params::State {
+        match state {
+            IssueState::Open => octocrab::params::State::Open,
+            IssueState::Closed => octocrab::params::State::Closed,
+            IssueState::All => octocrab::params::State::All,
         }
     }
 }

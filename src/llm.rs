@@ -1,4 +1,3 @@
-use reqwest;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Clone)]
@@ -25,7 +24,7 @@ pub async fn generate_response(
     messages: &mut Vec<Message>,
     endpoint: &str,
 ) -> Result<ChatChunk, reqwest::Error> {
-    let client: reqwest::Client = reqwest::Client::new();
+    let client = reqwest::Client::new();
 
     let response = client
         .post(endpoint)

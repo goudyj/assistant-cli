@@ -8,39 +8,32 @@ use regex::Regex;
 
 /// Parse markdown/HTML content for better terminal display
 pub fn parse_markdown_content(content: &str) -> String {
-    let mut result = content.to_string();
+    // Single regex that captures both alt and src in any order
+    let img_regex = Regex::new(r#"<img\s+[^>]*>"#).unwrap();
+    let alt_regex = Regex::new(r#"alt="([^"]*)""#).unwrap();
+    let src_regex = Regex::new(r#"src="([^"]*)""#).unwrap();
 
-    // Replace <img> tags with [Image: alt or url]
-    let img_regex =
-        Regex::new(r#"<img[^>]*(?:alt="([^"]*)")?[^>]*src="([^"]*)"[^>]*/?\s*>"#).unwrap();
-    result = img_regex
-        .replace_all(&result, |caps: &regex::Captures| {
-            let alt = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-            let src = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+    img_regex
+        .replace_all(content, |caps: &regex::Captures| {
+            let tag = caps.get(0).map(|m| m.as_str()).unwrap_or("");
+            let alt = alt_regex
+                .captures(tag)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str())
+                .unwrap_or("");
+            let src = src_regex
+                .captures(tag)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str())
+                .unwrap_or("");
+
             if !alt.is_empty() && alt != "Image" {
                 format!("[Image: {}]", alt)
             } else {
                 format!("[Image: {}]", src)
             }
         })
-        .to_string();
-
-    // Also handle img tags where src comes before alt
-    let img_regex2 =
-        Regex::new(r#"<img[^>]*src="([^"]*)"[^>]*(?:alt="([^"]*)")?[^>]*/?\s*>"#).unwrap();
-    result = img_regex2
-        .replace_all(&result, |caps: &regex::Captures| {
-            let src = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-            let alt = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-            if !alt.is_empty() && alt != "Image" {
-                format!("[Image: {}]", alt)
-            } else {
-                format!("[Image: {}]", src)
-            }
-        })
-        .to_string();
-
-    result
+        .to_string()
 }
 
 /// Render a markdown line with basic styling
