@@ -122,8 +122,7 @@ pub async fn handle_add_comment_key(
             if !input.is_empty() {
                 let comment_body = if browser.auto_format {
                     browser.status_message = Some("Formatting...".to_string());
-                    format_comment_with_llm(input, &browser.llm_endpoint)
-                        .await
+                    format_comment_with_llm(input, &browser.coding_agent)
                         .unwrap_or_else(|_| input.clone())
                 } else {
                     input.clone()

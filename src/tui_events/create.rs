@@ -20,12 +20,11 @@ pub async fn handle_create_issue_key(
             if matches!(stage, CreateStage::Description) && !input.is_empty() {
                 let description = input.clone();
                 let labels = browser.project_labels.clone();
-                let endpoint = browser.llm_endpoint.clone();
+                let agent_type = browser.coding_agent.clone();
 
                 *stage = CreateStage::Generating;
 
-                match crate::issues::generate_issue_with_labels(&description, &labels, &endpoint)
-                    .await
+                match crate::issues::generate_issue_with_labels(&description, &labels, &agent_type)
                 {
                     Ok((issue, messages)) => {
                         browser.view = TuiView::PreviewIssue {
@@ -92,17 +91,19 @@ pub async fn handle_preview_issue_key(
                 }
             } else {
                 let feedback = feedback_input.clone();
-                let endpoint = browser.llm_endpoint.clone();
+                let agent_type = browser.coding_agent.clone();
 
                 messages.push(llm::Message {
                     role: "user".to_string(),
                     content: feedback,
                 });
 
-                match llm::generate_response(messages, &endpoint).await {
+                match llm::generate_response(messages, &agent_type) {
                     Ok(response) => {
+                        // Extract JSON from response (may contain markdown fences)
+                        let json_content = extract_json(&response.content);
                         if let Ok(updated_issue) =
-                            serde_json::from_str::<IssueContent>(&response.message.content)
+                            serde_json::from_str::<IssueContent>(&json_content)
                         {
                             messages.push(llm::Message {
                                 role: "assistant".to_string(),
@@ -130,6 +131,38 @@ pub async fn handle_preview_issue_key(
         }
         _ => {}
     }
+}
+
+/// Extract JSON from a response that may contain markdown fences
+fn extract_json(content: &str) -> String {
+    let trimmed = content.trim();
+
+    // Try to find JSON in markdown code block
+    if let Some(start) = trimmed.find("```json") {
+        let after_fence = &trimmed[start + 7..];
+        if let Some(end) = after_fence.find("```") {
+            return after_fence[..end].trim().to_string();
+        }
+    }
+
+    // Try to find JSON in generic code block
+    if let Some(start) = trimmed.find("```") {
+        let after_fence = &trimmed[start + 3..];
+        let content_start = after_fence.find('\n').unwrap_or(0);
+        let after_lang = &after_fence[content_start..];
+        if let Some(end) = after_lang.find("```") {
+            return after_lang[..end].trim().to_string();
+        }
+    }
+
+    // Try to find raw JSON object
+    if let Some(start) = trimmed.find('{') {
+        if let Some(end) = trimmed.rfind('}') {
+            return trimmed[start..=end].to_string();
+        }
+    }
+
+    trimmed.to_string()
 }
 
 pub async fn handle_direct_issue_key(

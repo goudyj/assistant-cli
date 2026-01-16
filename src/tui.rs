@@ -48,7 +48,6 @@ pub struct IssueBrowser {
     pub github: GitHubConfig,
     pub github_token: Option<String>,
     pub auto_format: bool,
-    pub llm_endpoint: String,
     pub status_message: Option<String>,
     pub current_images: Vec<String>,
     pub current_image_index: usize,
@@ -110,14 +109,12 @@ impl IssueBrowser {
         github: GitHubConfig,
         github_token: Option<String>,
         auto_format: bool,
-        llm_endpoint: String,
     ) -> Self {
         Self::with_pagination(
             issues,
             github,
             github_token,
             auto_format,
-            llm_endpoint,
             Vec::new(),
             crate::list::IssueState::Open,
             false,
@@ -130,7 +127,6 @@ impl IssueBrowser {
         github: GitHubConfig,
         github_token: Option<String>,
         auto_format: bool,
-        llm_endpoint: String,
         list_labels: Vec<String>,
         list_state_filter: crate::list::IssueState,
         has_next_page: bool,
@@ -158,7 +154,6 @@ impl IssueBrowser {
             github,
             github_token,
             auto_format,
-            llm_endpoint,
             status_message: None,
             current_images: Vec::new(),
             current_image_index: 0,
@@ -872,14 +867,12 @@ pub async fn run_issue_browser(
     github: GitHubConfig,
     github_token: Option<String>,
     auto_format: bool,
-    llm_endpoint: &str,
 ) -> io::Result<()> {
     run_issue_browser_with_pagination(
         issues,
         github,
         github_token,
         auto_format,
-        llm_endpoint,
         Vec::new(),
         crate::list::IssueState::Open,
         false,
@@ -902,7 +895,6 @@ pub async fn run_issue_browser_with_pagination(
     github: GitHubConfig,
     github_token: Option<String>,
     auto_format: bool,
-    llm_endpoint: &str,
     labels: Vec<String>,
     state_filter: crate::list::IssueState,
     has_next_page: bool,
@@ -929,7 +921,6 @@ pub async fn run_issue_browser_with_pagination(
         github,
         github_token,
         auto_format,
-        llm_endpoint.to_string(),
         labels,
         state_filter,
         has_next_page,
@@ -1049,11 +1040,11 @@ pub async fn run_issue_browser_with_pagination(
 }
 
 /// Format a comment using LLM
-pub async fn format_comment_with_llm(
+pub fn format_comment_with_llm(
     comment: &str,
-    endpoint: &str,
+    agent_type: &crate::config::CodingAgentType,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let mut messages = vec![
+    let messages = vec![
         llm::Message {
             role: "system".to_string(),
             content: "You are a writing assistant. Correct grammar, fix typos, and improve clarity of the following comment for a GitHub issue. Keep it concise and professional. Return only the corrected text, no explanations or quotes.".to_string(),
@@ -1064,8 +1055,9 @@ pub async fn format_comment_with_llm(
         },
     ];
 
-    let response = llm::generate_response(&mut messages, endpoint).await?;
-    Ok(response.message.content.trim().to_string())
+    let response = llm::generate_response(&messages, agent_type)
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
+    Ok(response.content.trim().to_string())
 }
 
 #[cfg(test)]
