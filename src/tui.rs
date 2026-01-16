@@ -28,7 +28,7 @@ use crate::tui_events::{handle_key_event, handle_paste};
 pub use crate::tui_image::display_image;
 
 use crossterm::{
-    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -920,7 +920,7 @@ pub async fn run_issue_browser_with_pagination(
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -1004,6 +1004,33 @@ pub async fn run_issue_browser_with_pagination(
                         handle_paste(&mut browser, &content);
                     }
                 }
+                Event::Mouse(mouse_event) => {
+                    if matches!(browser.view, TuiView::EmbeddedTmux { .. }) {
+                        // Forward mouse events to embedded terminal (SGR mouse format)
+                        if let Some(ref term) = browser.embedded_term {
+                            let col = mouse_event.column + 1;
+                            let row = mouse_event.row + 1;
+                            let seq = match mouse_event.kind {
+                                MouseEventKind::ScrollUp => {
+                                    format!("\x1b[<64;{};{}M", col, row)
+                                }
+                                MouseEventKind::ScrollDown => {
+                                    format!("\x1b[<65;{};{}M", col, row)
+                                }
+                                _ => String::new(),
+                            };
+                            if !seq.is_empty() {
+                                term.send_input(seq.as_bytes());
+                            }
+                        }
+                    } else {
+                        match mouse_event.kind {
+                            MouseEventKind::ScrollUp => browser.previous(),
+                            MouseEventKind::ScrollDown => browser.next(),
+                            _ => {}
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -1012,6 +1039,7 @@ pub async fn run_issue_browser_with_pagination(
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
+        DisableMouseCapture,
         DisableBracketedPaste,
         LeaveAlternateScreen
     )?;
