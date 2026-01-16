@@ -35,6 +35,7 @@ pub enum Shortcut {
 
     // Agent / Worktree
     DispatchAgent,
+    StartAgent,
     OpenTmux,
     OpenAnyTmux,
     ViewLogs,
@@ -83,6 +84,7 @@ impl Shortcut {
             Self::ReopenIssue,
             Self::AssignUser,
             Self::DispatchAgent,
+            Self::StartAgent,
             Self::OpenTmux,
             Self::OpenAnyTmux,
             Self::ViewLogs,
@@ -127,6 +129,7 @@ impl Shortcut {
             Self::ReopenIssue => "X",
             Self::AssignUser => "a",
             Self::DispatchAgent => "d",
+            Self::StartAgent => "a",
             Self::OpenTmux => "t",
             Self::OpenAnyTmux => "T",
             Self::ViewLogs => "l",
@@ -171,6 +174,7 @@ impl Shortcut {
             Self::ReopenIssue => "Reopen issue",
             Self::AssignUser => "Assign user",
             Self::DispatchAgent => "Dispatch agent",
+            Self::StartAgent => "Start agent",
             Self::OpenTmux => "Open tmux session",
             Self::OpenAnyTmux => "Open any tmux session",
             Self::ViewLogs => "View agent logs",
@@ -195,6 +199,7 @@ impl Shortcut {
             Self::CreateIssueAI => "ai",
             Self::CreateIssueDirect => "new",
             Self::DispatchAgent => "dispatch",
+            Self::StartAgent => "agent",
             Self::OpenIDE => "ide",
             Self::CreatePR => "pr",
             Self::OpenTmux => "tmux",
@@ -245,6 +250,7 @@ impl Shortcut {
             | Self::AssignUser => CommandCategory::Issues,
 
             Self::DispatchAgent
+            | Self::StartAgent
             | Self::ViewLogs
             | Self::KillAgent
             | Self::OpenIDE
@@ -341,6 +347,7 @@ impl Shortcut {
                 CommandContext::WorktreeList,
             ],
             Self::CreateWorktree => &[CommandContext::WorktreeList],
+            Self::StartAgent => &[CommandContext::WorktreeList],
 
             // Browser open
             Self::OpenInBrowser => &[

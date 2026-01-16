@@ -178,6 +178,30 @@ pub fn handle_worktree_list_key(
                 }
             }
         }
+        KeyCode::Char('a') => {
+            // Start agent on selected worktree
+            if let Some(wt) = worktrees.get(*selected) {
+                // Check if tmux session is already running
+                let session_name = if let Some(issue_num) = wt.issue_number {
+                    crate::agents::tmux_session_name(&wt.project, issue_num)
+                } else {
+                    wt.name.clone()
+                };
+
+                if crate::agents::is_tmux_session_running(&session_name) {
+                    browser.status_message =
+                        Some("Tmux session already running. Open it with 't'.".to_string());
+                } else {
+                    // Extract branch name from worktree name
+                    let branch_name = wt.name.clone();
+                    browser.view = TuiView::WorktreeAgentInstructions {
+                        worktree_path: wt.path.clone(),
+                        branch_name,
+                        input: String::new(),
+                    };
+                }
+            }
+        }
         _ => {}
     }
 }
