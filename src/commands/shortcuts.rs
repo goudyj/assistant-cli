@@ -140,8 +140,8 @@ impl Shortcut {
             Self::ReviewPR => "r",
             Self::MergePR => "m",
             Self::ExitTerminal => "Ctrl+Q",
-            Self::PrevSession => "Ctrl+\u{2190}",
-            Self::NextSession => "Ctrl+\u{2192}",
+            Self::PrevSession => "Shift+\u{2190}",
+            Self::NextSession => "Shift+\u{2192}",
         }
     }
 

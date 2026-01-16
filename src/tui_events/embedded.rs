@@ -12,8 +12,9 @@ pub fn handle_embedded_tmux_key(
     current_index: &mut usize,
     return_to_worktrees: bool,
 ) {
-    let has_modifier =
-        modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::SUPER);
+    let has_modifier = modifiers.contains(KeyModifiers::CONTROL)
+        || modifiers.contains(KeyModifiers::SUPER)
+        || modifiers.contains(KeyModifiers::SHIFT);
 
     if key == KeyCode::Char('q') && modifiers.contains(KeyModifiers::CONTROL) {
         // Ctrl+Q to exit embedded terminal
@@ -37,7 +38,7 @@ pub fn handle_embedded_tmux_key(
             term.send_input(&[0x1b]); // ESC byte
         }
     } else if key == KeyCode::Left && has_modifier {
-        // Ctrl+Left or CMD+Left: switch to previous session
+        // Ctrl/Shift/CMD+Left: switch to previous session
         if !available_sessions.is_empty() && *current_index > 0 {
             *current_index -= 1;
             let session_name = &available_sessions[*current_index];
@@ -51,7 +52,7 @@ pub fn handle_embedded_tmux_key(
             }
         }
     } else if key == KeyCode::Right && has_modifier {
-        // Ctrl+Right or CMD+Right: switch to next session
+        // Ctrl/Shift/CMD+Right: switch to next session
         if !available_sessions.is_empty() && *current_index < available_sessions.len() - 1 {
             *current_index += 1;
             let session_name = &available_sessions[*current_index];
