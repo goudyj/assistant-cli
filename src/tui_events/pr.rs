@@ -228,17 +228,48 @@ pub async fn handle_dispatch_pr_review_key(
                     // Launch agent
                     let project_name = browser.current_project.clone();
                     match browser.dispatch_agent_for_worktree(&worktree_path, &review_prompt) {
-                        Ok(session_id) => {
+                        Ok(session_name) => {
                             browser.status_message =
-                                Some(format!("Started PR review session: {}", session_id));
+                                Some(format!("Started PR review session: {}", session_name));
                             browser.refresh_sessions(&project_name);
+
+                            // Open embedded terminal to show the agent
+                            let sessions = crate::agents::list_tmux_sessions();
+                            let mut all_sessions = sessions;
+                            if !all_sessions.contains(&session_name) {
+                                all_sessions.push(session_name.clone());
+                            }
+                            let current_index = all_sessions
+                                .iter()
+                                .position(|s| s == &session_name)
+                                .unwrap_or(0);
+                            let area = crossterm::terminal::size().unwrap_or((80, 24));
+                            match crate::embedded_term::EmbeddedTerminal::new(
+                                &session_name,
+                                area.1.saturating_sub(1),
+                                area.0,
+                            ) {
+                                Ok(term) => {
+                                    browser.embedded_term = Some(term);
+                                    browser.view = TuiView::EmbeddedTmux {
+                                        available_sessions: all_sessions,
+                                        current_index,
+                                        return_to_worktrees: false,
+                                    };
+                                }
+                                Err(e) => {
+                                    browser.status_message =
+                                        Some(format!("Failed to open terminal: {}", e));
+                                    browser.view = TuiView::PullRequestList;
+                                }
+                            }
                         }
                         Err(e) => {
                             browser.status_message =
                                 Some(format!("Failed to start agent: {}", e));
+                            browser.view = TuiView::PullRequestList;
                         }
                     }
-                    browser.view = TuiView::PullRequestList;
                 }
                 Err(e) => {
                     browser.status_message = Some(format!("Failed to create worktree: {}", e));
