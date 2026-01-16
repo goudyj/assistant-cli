@@ -3,7 +3,6 @@ use assistant::commands::CommandRegistry;
 use assistant::config;
 use assistant::github::GitHubConfig;
 use assistant::list::IssueState;
-use assistant::llm;
 use assistant::tui;
 
 #[tokio::main]
@@ -125,7 +124,6 @@ async fn main() {
     // 5. Launch TUI directly with issue list
     let github = GitHubConfig::new(project.owner.clone(), project.repo.clone(), token.clone());
     let auto_format = config.auto_format_comments;
-    let llm_endpoint = llm::default_endpoint();
 
     // Fetch initial issues
     match github
@@ -138,7 +136,6 @@ async fn main() {
                 github,
                 Some(token),
                 auto_format,
-                &llm_endpoint,
                 Vec::new(),
                 IssueState::Open,
                 has_next_page,

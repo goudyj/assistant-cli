@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Rust CLI tool that generates GitHub issues using an LLM (Ollama with Mistral 7B). It provides an interactive REPL interface where users can describe work in natural language (English or French), and the assistant generates well-formatted GitHub issues with proper categorization (bug/task), labels, and structure.
+This is a Rust CLI tool that generates GitHub issues using an LLM (Claude Code or Opencode CLI). It provides a TUI interface where users can describe work in natural language (English or French), and the assistant generates well-formatted GitHub issues with proper categorization (bug/task), labels, and structure.
 
 ## Architecture
 
@@ -23,10 +23,10 @@ This is a Rust CLI tool that generates GitHub issues using an LLM (Ollama with M
   - `Config::save()` persists config changes (e.g., last selected project)
   - `last_project` is auto-saved when selecting a project and restored on startup
 
-- **`llm`**: LLM interaction layer that communicates with Ollama API endpoints
-  - Uses `reqwest` for HTTP requests to `/api/chat` endpoint
-  - Model: `mistral:7b` with JSON output format
-  - Configurable endpoint via `LLM_ENDPOINT` environment variable
+- **`llm`**: LLM interaction layer using Claude Code or Opencode CLI
+  - Executes CLI commands (`claude -p` or `opencode run`) for issue generation
+  - Agent type configured via `coding_agent` setting in config file
+  - Builds prompts from message history and parses CLI output
 
 - **`issues`**: Issue generation logic with conversational refinement
   - `build_prompt(labels)` generates system prompt with project-specific labels
@@ -37,9 +37,9 @@ This is a Rust CLI tool that generates GitHub issues using an LLM (Ollama with M
   - `GitHubConfig::from_keyring(owner, repo)` loads token from system keyring
   - `create_issue(&IssueContent)` creates issue on GitHub with labels
 
-- **`main.rs`**: REPL interface using `reedline` with session management
-  - Commands: `/login`, `/logout`, `/repository <name>`, `/issue <desc>`, `/ok`, `/quit`
-  - `AppState` tracks config, current project, and issue session
+- **`main.rs`**: Application entry point
+  - Handles CLI arguments, config loading, and TUI initialization
+  - Manages project selection and authentication flow
 
 ### Key Flows
 
@@ -54,8 +54,8 @@ This is a Rust CLI tool that generates GitHub issues using an LLM (Ollama with M
 **Issue Generation Flow:**
 1. User selects project with `/repository <name>`
 2. User enters `/issue <description>`
-3. `issues::generate_issue_with_labels()` sends description + prompt with project labels to LLM
-4. User can provide feedback to refine, or `/ok` to create on GitHub
+3. `issues::generate_issue_with_labels()` calls the configured CLI (Claude or Opencode) with prompt
+4. User can provide feedback to refine, or confirm to create on GitHub
 
 ## Configuration
 
@@ -77,7 +77,7 @@ This is a Rust CLI tool that generates GitHub issues using an LLM (Ollama with M
 ```
 
 - `github_client_id`: Optional override for OAuth App Client ID (embedded by default)
-- `coding_agent`: CLI to use for dispatch (`"claude"` or `"opencode"`, default: `"claude"`)
+- `coding_agent`: CLI to use for issue generation and dispatch (`"claude"` or `"opencode"`, default: `"claude"`)
 - `last_project`: Automatically managed by the application
 - `local_path`: Path to the local git repository for worktree creation
 - `base_branch`: Base branch for new branches (auto-detects main/master/develop if not set)
@@ -93,12 +93,8 @@ cargo test config::tests            # Module tests
 ```
 
 ### Test Infrastructure
-- Uses `wiremock` for HTTP mocking (see `test_helpers::MockChatServer`)
+- Uses `wiremock` for HTTP mocking (GitHub API tests)
 - Tests use `#[tokio::test(flavor = "current_thread")]` for async
-
-## Environment Variables
-
-- **`LLM_ENDPOINT`**: Override Ollama endpoint (default: `http://localhost:11434/api/chat`)
 
 ## CLI Commands
 
