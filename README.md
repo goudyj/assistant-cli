@@ -120,6 +120,19 @@ Successfully logged in to GitHub!
 
 The token is stored in `~/.config/assistant.json`.
 
+#### Using a Personal Access Token
+
+You can also use a GitHub Personal Access Token instead of the OAuth flow. Add it directly to your config file:
+
+```json
+{
+  "github_token": "ghp_your_personal_access_token",
+  "projects": { ... }
+}
+```
+
+To create a token, go to [GitHub Settings > Developer settings > Personal access tokens](https://github.com/settings/tokens) and generate a token with `repo` scope.
+
 ### Commands
 
 Press `/` in the TUI to open the command palette.
