@@ -10,6 +10,7 @@ use crate::issues::IssueContent;
 use crate::markdown::{parse_markdown_content, render_markdown_line};
 use crate::tui_types::{CommandSuggestion, CreateStage, IssueFilterFocus, IssueStatus, PrFilterFocus, PrStatus, TuiView};
 use crate::tui_utils::{format_date, truncate_str};
+use crate::widgets::{ConfirmDialog, Popup, StatusBar};
 
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
@@ -494,33 +495,23 @@ fn build_list_title(browser: &IssueBrowser) -> String {
     format_status_bar(CommandContext::IssueList, &parts.join(" "))
 }
 
-/// Draw centered search popup
+/// Draw centered search popup using composable widgets
 pub fn draw_search_popup(f: &mut Frame, input: &str) {
     let area = f.area();
 
-    // Calculate centered popup area (50 chars wide, 3 lines tall)
-    let popup_width = 50.min(area.width.saturating_sub(4));
-    let popup_height = 3;
-    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
-    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+    // Use Popup widget for the container
+    let popup = Popup::new(" Search GitHub ")
+        .percent(50, 10)
+        .min_size(50, 3)
+        .border_color(Color::Yellow);
 
-    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+    let inner = popup.inner(area);
+    f.render_widget(popup, area);
 
-    // Clear the background behind the popup
-    let clear = Block::default().style(Style::default().bg(Color::Black));
-    f.render_widget(clear, popup_area);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Search GitHub ")
-        .border_style(Style::default().fg(Color::Yellow));
-
+    // Render the input text with cursor
     let text = format!("{}_", input);
-    let paragraph = Paragraph::new(text)
-        .block(block)
-        .style(Style::default().fg(Color::White));
-
-    f.render_widget(paragraph, popup_area);
+    let paragraph = Paragraph::new(text).style(Style::default().fg(Color::White));
+    f.render_widget(paragraph, inner);
 }
 
 /// Draw issue detail view
@@ -653,45 +644,14 @@ pub fn draw_comment_input(f: &mut Frame, area: Rect, input: &str, status: Option
     f.render_widget(paragraph, area);
 }
 
-/// Draw confirmation dialog
+/// Draw confirmation dialog using the ConfirmDialog widget
 pub fn draw_confirmation(f: &mut Frame, area: Rect, message: &str) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
-
-    let paragraph = Paragraph::new(message)
-        .block(block)
-        .style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )
-        .alignment(Alignment::Center);
-
-    f.render_widget(paragraph, area);
+    f.render_widget(ConfirmDialog::new(message), area);
 }
 
-/// Draw status bar
+/// Draw status bar using the StatusBar widget
 pub fn draw_status_bar(f: &mut Frame, area: Rect, message: &str) {
-    let color = if message.contains("Failed")
-        || message.contains("No ")
-        || message.contains("error")
-    {
-        Color::Red
-    } else {
-        Color::Green
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(color));
-
-    let paragraph = Paragraph::new(message)
-        .block(block)
-        .style(Style::default().fg(color))
-        .alignment(Alignment::Center);
-
-    f.render_widget(paragraph, area);
+    f.render_widget(StatusBar::new(message), area);
 }
 
 /// Draw assignee picker

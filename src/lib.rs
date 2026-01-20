@@ -18,3 +18,4 @@ pub mod tui_events;
 pub mod tui_image;
 pub mod tui_types;
 pub mod tui_utils;
+pub mod widgets;
