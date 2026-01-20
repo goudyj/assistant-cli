@@ -379,8 +379,8 @@ pub struct WorktreeInfo {
     pub issue_number: Option<u64>,
     /// Whether this worktree has an active session
     pub has_session: bool,
-    /// Whether there's a running tmux session for this worktree
-    pub has_tmux: bool,
+    /// Whether there's a running PTY session for this worktree
+    pub has_pty: bool,
 }
 
 /// List all worktrees in the cache directory with their status.
@@ -406,7 +406,7 @@ pub fn list_worktrees() -> Vec<WorktreeInfo> {
                     project,
                     issue_number,
                     has_session: false, // Will be filled in by caller
-                    has_tmux: false,    // Will be filled in by caller
+                    has_pty: false,     // Will be filled in by caller
                 });
             }
         }

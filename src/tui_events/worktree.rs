@@ -72,9 +72,9 @@ pub fn handle_worktree_list_key(
             // Show confirmation before deleting
             let selected_idx = *selected;
             if let Some(wt) = worktrees.get(selected_idx).cloned() {
-                if wt.has_tmux {
+                if wt.has_pty {
                     browser.status_message =
-                        Some("Tmux session still running. Kill it first (K).".to_string());
+                        Some("Session still running. Kill it first (K).".to_string());
                 } else {
                     browser.view = TuiView::ConfirmDeleteWorktree {
                         worktree: wt,
@@ -84,32 +84,34 @@ pub fn handle_worktree_list_key(
             }
         }
         KeyCode::Char('K') => {
-            // Kill tmux session for selected worktree
+            // Kill PTY session for selected worktree
             let selected_idx = *selected;
             if let Some(wt) = worktrees.get(selected_idx).cloned() {
-                // Determine tmux session name based on worktree type
-                let tmux_name = if let Some(issue_num) = wt.issue_number {
-                    crate::agents::tmux_session_name(&wt.project, issue_num)
+                // Determine PTY session name based on worktree type
+                let session_name = if let Some(issue_num) = wt.issue_number {
+                    crate::agents::pty_session_name(&wt.project, issue_num)
                 } else {
                     // Standalone worktree: session name matches worktree name
                     wt.name.clone()
                 };
 
-                if crate::agents::is_tmux_session_running(&tmux_name) {
+                if crate::agents::is_pty_session_running(&session_name) {
                     if let Some(issue_num) = wt.issue_number {
                         let manager = crate::agents::SessionManager::load();
                         if let Some(session) = manager.get_by_issue(&wt.project, issue_num) {
                             // Session exists in manager, use kill_agent to update status
                             let _ = crate::agents::kill_agent(&session.id);
                         } else {
-                            // Orphaned: no session but tmux running, kill directly
-                            let _ = crate::agents::kill_tmux_session(&tmux_name);
+                            // Orphaned: no session but PTY running, kill directly
+                            crate::agents::pty_manager().kill_session(&session_name);
+                            crate::agents::pty_manager().remove_session(&session_name);
                         }
                     } else {
-                        // Standalone worktree without issue: kill tmux directly
-                        let _ = crate::agents::kill_tmux_session(&tmux_name);
+                        // Standalone worktree without issue: kill PTY directly
+                        crate::agents::pty_manager().kill_session(&session_name);
+                        crate::agents::pty_manager().remove_session(&session_name);
                     }
-                    browser.status_message = Some(format!("Killed tmux session: {}", tmux_name));
+                    browser.status_message = Some(format!("Killed session: {}", session_name));
                     // Refresh session cache to update issue list indicators
                     browser.refresh_sessions(&wt.project);
                     // Refresh the list
@@ -120,7 +122,7 @@ pub fn handle_worktree_list_key(
                         selected: new_selected,
                     };
                 } else {
-                    browser.status_message = Some("No tmux session running".to_string());
+                    browser.status_message = Some("No session running".to_string());
                 }
             }
         }
@@ -136,32 +138,32 @@ pub fn handle_worktree_list_key(
             }
         }
         KeyCode::Char('t') => {
-            // Open tmux session for selected worktree
+            // Open PTY session for selected worktree
             if let Some(wt) = worktrees.get(*selected) {
-                // Determine tmux session name based on worktree type
+                // Determine PTY session name based on worktree type
                 let session_name = if let Some(issue_num) = wt.issue_number {
-                    crate::agents::tmux_session_name(&wt.project, issue_num)
+                    crate::agents::pty_session_name(&wt.project, issue_num)
                 } else {
                     // Standalone worktree: session name matches worktree name
                     wt.name.clone()
                 };
 
-                if crate::agents::is_tmux_session_running(&session_name) {
-                    let all_sessions = crate::agents::list_all_tmux_sessions();
+                if crate::agents::is_pty_session_running(&session_name) {
+                    let all_sessions = crate::agents::list_all_pty_sessions();
                     let current_index = all_sessions
                         .iter()
                         .position(|s| s == &session_name)
                         .unwrap_or(0);
-                    // Create embedded terminal to attach to tmux session
+                    // Create embedded terminal to attach to PTY session
                     let area = crossterm::terminal::size().unwrap_or((80, 24));
-                    match crate::embedded_term::EmbeddedTerminal::new(
+                    match crate::embedded_term::EmbeddedTerminal::attach(
                         &session_name,
                         area.1.saturating_sub(1),
                         area.0,
                     ) {
                         Ok(term) => {
                             browser.embedded_term = Some(term);
-                            browser.view = TuiView::EmbeddedTmux {
+                            browser.view = TuiView::EmbeddedPty {
                                 available_sessions: all_sessions,
                                 current_index,
                                 return_to_worktrees: true,
@@ -174,23 +176,23 @@ pub fn handle_worktree_list_key(
                     }
                 } else {
                     browser.status_message =
-                        Some("No tmux session running for this worktree".to_string());
+                        Some("No session running for this worktree".to_string());
                 }
             }
         }
         KeyCode::Char('a') => {
             // Start agent on selected worktree
             if let Some(wt) = worktrees.get(*selected) {
-                // Check if tmux session is already running
+                // Check if PTY session is already running
                 let session_name = if let Some(issue_num) = wt.issue_number {
-                    crate::agents::tmux_session_name(&wt.project, issue_num)
+                    crate::agents::pty_session_name(&wt.project, issue_num)
                 } else {
                     wt.name.clone()
                 };
 
-                if crate::agents::is_tmux_session_running(&session_name) {
+                if crate::agents::is_pty_session_running(&session_name) {
                     browser.status_message =
-                        Some("Tmux session already running. Open it with 't'.".to_string());
+                        Some("Session already running. Open it with 't'.".to_string());
                 } else {
                     // Extract branch name from worktree name
                     let branch_name = wt.name.clone();

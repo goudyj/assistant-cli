@@ -15,8 +15,8 @@ pub enum CommandContext {
     PullRequestList,
     /// Pull request detail view
     PullRequestDetail,
-    /// Embedded tmux terminal
-    EmbeddedTmux,
+    /// Embedded PTY terminal
+    EmbeddedPty,
 }
 
 /// Category for grouping shortcuts in help display.
@@ -25,7 +25,7 @@ pub enum CommandCategory {
     Navigation,
     Issues,
     Agent,
-    Tmux,
+    Terminal,
     PullRequests,
     Worktrees,
     Other,
@@ -38,7 +38,7 @@ impl CommandCategory {
             Self::Navigation => "NAVIGATION",
             Self::Issues => "ISSUES",
             Self::Agent => "AGENT / WORKTREE",
-            Self::Tmux => "TMUX",
+            Self::Terminal => "TERMINAL",
             Self::PullRequests => "PULL REQUESTS",
             Self::Worktrees => "WORKTREES",
             Self::Other => "OTHER",
@@ -51,7 +51,7 @@ impl CommandCategory {
             Self::Navigation => 0,
             Self::Issues => 1,
             Self::Agent => 2,
-            Self::Tmux => 3,
+            Self::Terminal => 3,
             Self::PullRequests => 4,
             Self::Worktrees => 5,
             Self::Other => 6,

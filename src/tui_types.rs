@@ -29,8 +29,8 @@ pub enum TuiView {
         content: String,
         scroll: u16,
     },
-    EmbeddedTmux {
-        /// Available tmux sessions for switching
+    EmbeddedPty {
+        /// Available PTY sessions for switching
         available_sessions: Vec<String>,
         /// Current session index
         current_index: usize,

@@ -68,7 +68,7 @@ pub struct IssueBrowser {
     pub selected_issues: std::collections::HashSet<u64>,
     // Session cache for dispatch status display
     pub session_cache: std::collections::HashMap<u64, crate::agents::AgentSession>,
-    // Embedded terminal for tmux sessions
+    // Embedded terminal for PTY sessions
     pub embedded_term: Option<crate::embedded_term::EmbeddedTerminal>,
     // Last session cache refresh time
     pub last_session_refresh: std::time::Instant,
@@ -227,11 +227,11 @@ impl IssueBrowser {
         for wt in &mut worktrees {
             wt.has_session = session_worktrees.contains(&wt.path);
             if let Some(issue_num) = wt.issue_number {
-                let tmux_name = crate::agents::tmux_session_name(&wt.project, issue_num);
-                wt.has_tmux = crate::agents::is_tmux_session_running(&tmux_name);
+                let session_name = crate::agents::pty_session_name(&wt.project, issue_num);
+                wt.has_pty = crate::agents::is_pty_session_running(&session_name);
             } else {
                 // Standalone worktree: session name is the worktree name
-                wt.has_tmux = crate::agents::is_tmux_session_running(&wt.name);
+                wt.has_pty = crate::agents::is_pty_session_running(&wt.name);
             }
         }
         worktrees
@@ -379,7 +379,7 @@ impl IssueBrowser {
     /// Refresh session cache for the current project
     pub fn refresh_sessions(&mut self, project: &str) {
         let mut manager = crate::agents::SessionManager::load();
-        if manager.sync_with_tmux() {
+        if manager.sync_with_pty() {
             let _ = manager.save();
         }
         self.session_cache.clear();
@@ -413,7 +413,7 @@ impl IssueBrowser {
         }
         let _ = manager.save();
 
-        if manager.sync_with_tmux() {
+        if manager.sync_with_pty() {
             let _ = manager.save();
         }
 
@@ -848,7 +848,7 @@ impl IssueBrowser {
     ) -> Result<String, String> {
         let session_name = format!("pr-review-{}", uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("unknown"));
 
-        // Launch agent interactively with tmux
+        // Launch agent interactively with PTY
         crate::agents::launch_agent_interactive(
             worktree_path,
             &session_name,
@@ -962,7 +962,7 @@ pub async fn run_issue_browser_with_pagination(
         if event::poll(std::time::Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    let in_embedded_terminal = matches!(browser.view, TuiView::EmbeddedTmux { .. });
+                    let in_embedded_terminal = matches!(browser.view, TuiView::EmbeddedPty { .. });
                     let is_cmd_v = key.code == KeyCode::Char('v')
                         && key.modifiers.contains(KeyModifiers::SUPER);
                     let is_ctrl_v = key.code == KeyCode::Char('v')
@@ -986,7 +986,7 @@ pub async fn run_issue_browser_with_pagination(
                     }
                 }
                 Event::Paste(content) => {
-                    if matches!(browser.view, TuiView::EmbeddedTmux { .. }) {
+                    if matches!(browser.view, TuiView::EmbeddedPty { .. }) {
                         // In embedded terminal: send paste content directly
                         if let Some(ref term) = browser.embedded_term {
                             term.send_input(content.as_bytes());
@@ -996,7 +996,7 @@ pub async fn run_issue_browser_with_pagination(
                     }
                 }
                 Event::Mouse(mouse_event) => {
-                    if matches!(browser.view, TuiView::EmbeddedTmux { .. }) {
+                    if matches!(browser.view, TuiView::EmbeddedPty { .. }) {
                         // Forward mouse events to embedded terminal (SGR mouse format)
                         if let Some(ref term) = browser.embedded_term {
                             let col = mouse_event.column + 1;

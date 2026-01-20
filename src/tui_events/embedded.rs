@@ -1,10 +1,10 @@
-//! Embedded terminal (tmux) event handling.
+//! Embedded terminal (PTY) event handling.
 
 use crate::tui::IssueBrowser;
 use crate::tui_types::TuiView;
 use crossterm::event::{KeyCode, KeyModifiers};
 
-pub fn handle_embedded_tmux_key(
+pub fn handle_embedded_pty_key(
     browser: &mut IssueBrowser,
     key: KeyCode,
     modifiers: KeyModifiers,
@@ -33,7 +33,7 @@ pub fn handle_embedded_tmux_key(
             browser.refresh_sessions_with_fresh_stats(&project);
         }
     } else if key == KeyCode::Esc {
-        // Single ESC passes through to tmux
+        // Single ESC passes through to the PTY session
         if let Some(ref term) = browser.embedded_term {
             term.send_input(&[0x1b]); // ESC byte
         }
@@ -43,7 +43,7 @@ pub fn handle_embedded_tmux_key(
             *current_index -= 1;
             let session_name = &available_sessions[*current_index];
             let area = crossterm::terminal::size().unwrap_or((80, 24));
-            if let Ok(term) = crate::embedded_term::EmbeddedTerminal::new(
+            if let Ok(term) = crate::embedded_term::EmbeddedTerminal::attach(
                 session_name,
                 area.1.saturating_sub(1),
                 area.0,
@@ -57,7 +57,7 @@ pub fn handle_embedded_tmux_key(
             *current_index += 1;
             let session_name = &available_sessions[*current_index];
             let area = crossterm::terminal::size().unwrap_or((80, 24));
-            if let Ok(term) = crate::embedded_term::EmbeddedTerminal::new(
+            if let Ok(term) = crate::embedded_term::EmbeddedTerminal::attach(
                 session_name,
                 area.1.saturating_sub(1),
                 area.0,

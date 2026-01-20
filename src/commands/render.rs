@@ -79,7 +79,7 @@ pub fn generate_full_help() -> Vec<Line<'static>> {
     // Embedded Terminal section
     lines.push(section_header("EMBEDDED TERMINAL"));
     lines.push(Line::from(""));
-    lines.extend(help_lines_for_context(CommandContext::EmbeddedTmux));
+    lines.extend(help_lines_for_context(CommandContext::EmbeddedPty));
 
     lines
 }
@@ -142,7 +142,7 @@ pub fn status_bar_shortcuts(context: CommandContext) -> &'static [Shortcut] {
             Shortcut::MergePR,
             Shortcut::GoBack,
         ],
-        CommandContext::EmbeddedTmux => &[
+        CommandContext::EmbeddedPty => &[
             Shortcut::ExitTerminal,
             Shortcut::PrevSession,
             Shortcut::NextSession,

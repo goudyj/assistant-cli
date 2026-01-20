@@ -1,11 +1,5 @@
 //! TUI utility functions.
 
-use std::io;
-use crossterm::{
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-
 /// Format a date string to just the date part (YYYY-MM-DD)
 pub fn format_date(date_str: &str) -> String {
     if date_str.len() >= 10 {
@@ -33,31 +27,6 @@ pub fn truncate_str(s: &str, max_chars: usize) -> String {
         let truncated: String = s.chars().take(max_chars - 3).collect();
         format!("{}...", truncated)
     }
-}
-
-/// Attach to a tmux session, temporarily exiting the TUI
-#[allow(dead_code)]
-pub fn attach_to_tmux_session(session_name: &str) -> io::Result<()> {
-    // Exit raw mode and alternate screen
-    disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen)?;
-
-    // Run tmux attach interactively
-    let status = std::process::Command::new("tmux")
-        .args(["attach", "-t", session_name])
-        .status()?;
-
-    // Re-enter alternate screen and raw mode
-    execute!(io::stdout(), EnterAlternateScreen)?;
-    enable_raw_mode()?;
-
-    if !status.success() {
-        return Err(io::Error::other(
-            "tmux attach failed",
-        ));
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]
