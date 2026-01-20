@@ -10,7 +10,12 @@ use crate::issues::IssueContent;
 use crate::markdown::{parse_markdown_content, render_markdown_line};
 use crate::tui_types::{CommandSuggestion, CreateStage, IssueFilterFocus, IssueStatus, PrFilterFocus, PrStatus, TuiView};
 use crate::tui_utils::{format_date, truncate_str};
-use crate::widgets::{ConfirmDialog, Popup, StatusBar};
+use crate::widgets::{
+    build_issue_item, build_issue_item_dimmed, build_issue_list_title,
+    render_command_palette, render_filter_popup,
+    ConfirmDialog, CommandPaletteConfig, FilterFocus, FilterOption, FilterPopupConfig,
+    IssueListTitleConfig, Popup, StatusBar,
+};
 
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
@@ -352,107 +357,29 @@ pub fn draw_list_view(f: &mut Frame, browser: &mut IssueBrowser) {
     draw_list_view_in_area(f, browser, area);
 }
 
-/// Draw list view in a specific area
+/// Draw list view in a specific area using the IssueList widget
 pub fn draw_list_view_in_area(f: &mut Frame, browser: &mut IssueBrowser, area: Rect) {
-    use crate::agents::AgentStatus;
-
     let items: Vec<ListItem> = browser
         .issues
         .iter()
         .map(|issue| {
             let is_selected = browser.selected_issues.contains(&issue.number);
-            let select_marker = if is_selected { "[x] " } else { "[ ] " };
-
-            let session_info = browser.session_cache.get(&issue.number);
-            let (session_icon, session_color, session_stats) = match session_info {
-                Some(session) => {
-                    let (icon, color) = match &session.status {
-                        AgentStatus::Running => ("▶", Color::Yellow),
-                        AgentStatus::Awaiting => ("⏸", Color::Cyan),
-                        AgentStatus::Completed { .. } | AgentStatus::Failed { .. } => {
-                            ("●", Color::Blue)
-                        }
-                    };
-                    let stats = if session.stats.lines_added > 0 || session.stats.lines_deleted > 0
-                    {
-                        format!(" +{} -{}", session.stats.lines_added, session.stats.lines_deleted)
-                    } else {
-                        String::new()
-                    };
-                    (Some(icon), color, stats)
-                }
-                None => (None, Color::DarkGray, String::new()),
-            };
-
-            let labels_str = if issue.labels.is_empty() {
-                String::new()
-            } else {
-                format!(" [{}]", issue.labels.join(", "))
-            };
-            let assignees_str = if issue.assignees.is_empty() {
-                String::new()
-            } else {
-                format!(" @{}", issue.assignees.join(", @"))
-            };
-            let is_closed = issue.state == "Closed";
-            let line = if is_closed {
-                Line::from(vec![
-                    Span::styled(
-                        select_marker,
-                        if is_selected {
-                            Style::default().fg(Color::Green)
-                        } else {
-                            Style::default().fg(Color::DarkGray)
-                        },
-                    ),
-                    Span::styled(
-                        format!("#{:<5}", issue.number),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                    Span::styled(" ✓ ", Style::default().fg(Color::Green)),
-                    Span::styled(
-                        &issue.title,
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::CROSSED_OUT),
-                    ),
-                    Span::styled(labels_str, Style::default().fg(Color::DarkGray)),
-                    Span::styled(assignees_str, Style::default().fg(Color::DarkGray)),
-                ])
-            } else {
-                let session_span = if let Some(icon) = session_icon {
-                    Span::styled(
-                        format!("{}{}  ", icon, session_stats),
-                        Style::default().fg(session_color),
-                    )
-                } else {
-                    Span::raw("    ")
-                };
-
-                Line::from(vec![
-                    Span::styled(
-                        select_marker,
-                        if is_selected {
-                            Style::default().fg(Color::Green)
-                        } else {
-                            Style::default().fg(Color::DarkGray)
-                        },
-                    ),
-                    Span::styled(
-                        format!("#{:<5}", issue.number),
-                        Style::default().fg(Color::Cyan),
-                    ),
-                    session_span,
-                    Span::raw(&issue.title),
-                    Span::styled(labels_str, Style::default().fg(Color::DarkGray)),
-                    Span::styled(assignees_str, Style::default().fg(Color::Magenta)),
-                ])
-            };
-            ListItem::new(line)
+            let session = browser.session_cache.get(&issue.number);
+            build_issue_item(issue, is_selected, session)
         })
         .collect();
 
-    let title = build_list_title(browser);
+    let title_config = IssueListTitleConfig {
+        search_query: browser.search_query.clone(),
+        total_count: browser.all_issues.len(),
+        has_next_page: browser.has_next_page,
+        is_loading: browser.is_loading,
+        selected_count: browser.selected_issues.len(),
+    };
+    let title = format_status_bar(
+        CommandContext::IssueList,
+        &build_issue_list_title(&title_config, "Issues"),
+    );
 
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title(title))
@@ -464,35 +391,6 @@ pub fn draw_list_view_in_area(f: &mut Frame, browser: &mut IssueBrowser, area: R
         .highlight_symbol("▶ ");
 
     f.render_stateful_widget(list, area, &mut browser.list_state);
-}
-
-/// Build the title string for the list view
-fn build_list_title(browser: &IssueBrowser) -> String {
-    let mut parts = Vec::new();
-    parts.push("Issues".to_string());
-
-    if let Some(ref query) = browser.search_query {
-        parts.push(format!("(filtered: '{}')", query));
-    }
-
-    if browser.has_next_page {
-        parts.push(format!(
-            "[{} loaded, more available]",
-            browser.all_issues.len()
-        ));
-    } else if browser.all_issues.len() > 20 {
-        parts.push(format!("[{} total]", browser.all_issues.len()));
-    }
-
-    if browser.is_loading {
-        parts.push("[Loading...]".to_string());
-    }
-
-    if !browser.selected_issues.is_empty() {
-        parts.push(format!("[{} selected]", browser.selected_issues.len()));
-    }
-
-    format_status_bar(CommandContext::IssueList, &parts.join(" "))
 }
 
 /// Draw centered search popup using composable widgets
@@ -912,7 +810,7 @@ pub fn draw_agent_select(
     f.render_widget(help, chunks[1]);
 }
 
-/// Draw command palette
+/// Draw command palette using the CommandPalette widget
 pub fn draw_command_palette(
     f: &mut Frame,
     browser: &IssueBrowser,
@@ -921,7 +819,6 @@ pub fn draw_command_palette(
     selected: usize,
 ) {
     let area = f.area();
-
     let chunks =
         Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)]).split(area);
 
@@ -929,88 +826,16 @@ pub fn draw_command_palette(
     draw_list_view_in_area_dimmed(f, browser, chunks[0]);
 
     // Command palette panel
-    let cmd_area = chunks[1];
-    let title = if suggestions.is_empty() {
-        " Commands (no match) │ Esc cancel "
-    } else {
-        " Commands │ ↑↓ navigate │ Enter execute │ Esc cancel "
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .border_style(Style::default().fg(Color::Yellow));
-
-    let inner = block.inner(cmd_area);
-    f.render_widget(block, cmd_area);
-
-    let inner_chunks =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1)])
-            .split(inner);
-
-    // Input field with cursor
-    let input_text = format!("/{}_", input);
-    let input_para = Paragraph::new(input_text)
-        .style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD));
-    f.render_widget(input_para, inner_chunks[0]);
-
-    // Separator
-    let sep = Paragraph::new("─".repeat(inner_chunks[1].width as usize))
-        .style(Style::default().fg(Color::DarkGray));
-    f.render_widget(sep, inner_chunks[1]);
-
-    // Suggestions list
-    let items: Vec<ListItem> = suggestions
-        .iter()
-        .enumerate()
-        .map(|(i, cmd)| {
-            let is_selected = i == selected;
-            let prefix = if is_selected { "▸ " } else { "  " };
-            let style = if is_selected {
-                Style::default().bg(Color::DarkGray)
-            } else {
-                Style::default()
-            };
-
-            let line = Line::from(vec![
-                Span::raw(prefix),
-                Span::styled(
-                    format!("/{}", cmd.name),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("  "),
-                Span::styled(&cmd.description, Style::default().fg(Color::White)),
-            ]);
-            ListItem::new(line).style(style)
-        })
-        .collect();
-
-    let list = List::new(items);
-    f.render_widget(list, inner_chunks[2]);
+    let config = CommandPaletteConfig::new(input, suggestions, selected);
+    render_command_palette(f, chunks[1], &config);
 }
 
-/// Draw list view but dimmed (for overlay effect)
+/// Draw list view but dimmed (for overlay effect) using the IssueList widget
 fn draw_list_view_in_area_dimmed(f: &mut Frame, browser: &IssueBrowser, area: Rect) {
     let items: Vec<ListItem> = browser
         .issues
         .iter()
-        .map(|issue| {
-            let labels_str = if issue.labels.is_empty() {
-                String::new()
-            } else {
-                format!(" [{}]", issue.labels.join(", "))
-            };
-            let line = Line::from(vec![
-                Span::styled(
-                    format!("#{:<5}", issue.number),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(&issue.title, Style::default().fg(Color::DarkGray)),
-                Span::styled(labels_str, Style::default().fg(Color::DarkGray)),
-            ]);
-            ListItem::new(line)
-        })
+        .map(|issue| build_issue_item_dimmed(issue))
         .collect();
 
     let list = List::new(items).block(
@@ -2056,7 +1881,7 @@ fn draw_pr_review_popup(f: &mut Frame, pr: &PullRequestDetail, input: &str) {
     f.render_widget(hint, chunks[2]);
 }
 
-/// Draw PR filters popup
+/// Draw PR filters popup using the FilterPopup widget
 fn draw_pr_filters_popup(
     f: &mut Frame,
     status_filter: &HashSet<PrStatus>,
@@ -2068,116 +1893,28 @@ fn draw_pr_filters_popup(
     author_input: &str,
     author_suggestions: &[String],
 ) {
-    let area = centered_rect(50, 60, f.area());
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" PR Filters ")
-        .style(Style::default().bg(Color::Black));
-
-    let inner = block.inner(area);
-    f.render_widget(ratatui::widgets::Clear, area);
-    f.render_widget(block, area);
-
-    let chunks = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(6),
-        Constraint::Length(1),
-        Constraint::Length(1), // Author input field
-        Constraint::Min(5),    // Author suggestions/selected
-        Constraint::Length(1),
-    ])
-    .split(inner);
-
-    // Status section header
-    let status_header_style = if *focus == PrFilterFocus::Status {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let status_header = Paragraph::new("Status:")
-        .style(status_header_style);
-    f.render_widget(status_header, chunks[0]);
-
-    // Status options
-    let status_items: Vec<ListItem> = PrStatus::all()
+    let status_options: Vec<FilterOption> = PrStatus::all()
         .iter()
-        .enumerate()
-        .map(|(i, status)| {
-            let checked = if status_filter.contains(status) { "[x]" } else { "[ ]" };
-            let style = if *focus == PrFilterFocus::Status && i == selected_status {
-                Style::default().bg(Color::DarkGray)
-            } else {
-                Style::default()
-            };
-            ListItem::new(format!("{} {}", checked, status.label())).style(style)
+        .map(|s| FilterOption {
+            label: s.label().to_string(),
+            checked: status_filter.contains(s),
         })
         .collect();
 
-    let status_list = List::new(status_items);
-    f.render_widget(status_list, chunks[1]);
-
-    // Author section header
-    let author_header_style = if *focus == PrFilterFocus::Author {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let author_header = Paragraph::new("Author:")
-        .style(author_header_style);
-    f.render_widget(author_header, chunks[2]);
-
-    // Author input field
-    let input_style = if *focus == PrFilterFocus::Author {
-        Style::default().fg(Color::White)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let input_text = if author_input.is_empty() && *focus == PrFilterFocus::Author {
-        "Type to search or add author...".to_string()
-    } else if author_input.is_empty() {
-        "".to_string()
-    } else {
-        format!("@{}_", author_input)
-    };
-    let input_paragraph = Paragraph::new(input_text)
-        .style(if author_input.is_empty() && *focus == PrFilterFocus::Author {
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)
-        } else {
-            input_style
-        });
-    f.render_widget(input_paragraph, chunks[3]);
-
-    // Author list: always show all available authors with checkmarks
-    let author_items: Vec<ListItem> = if author_suggestions.is_empty() {
-        vec![ListItem::new("No authors available").style(Style::default().fg(Color::DarkGray))]
-    } else {
-        author_suggestions
-            .iter()
-            .enumerate()
-            .map(|(i, author)| {
-                let checked = if author_filter.contains(author) { "[x]" } else { "[ ]" };
-                let style = if *focus == PrFilterFocus::Author && i == selected_author {
-                    Style::default().bg(Color::DarkGray)
-                } else {
-                    Style::default()
-                };
-                ListItem::new(format!("{} @{}", checked, author)).style(style)
-            })
-            .collect()
+    let filter_focus = match focus {
+        PrFilterFocus::Status => FilterFocus::Status,
+        PrFilterFocus::Author => FilterFocus::Author,
     };
 
-    let author_list = List::new(author_items);
-    f.render_widget(author_list, chunks[4]);
+    let config = FilterPopupConfig::new("PR Filters", author_suggestions, author_filter, author_input)
+        .status_options(status_options)
+        .focus(filter_focus, selected_status, selected_author)
+        .status_height(6);
 
-    // Hint
-    let hint = Paragraph::new("Tab: switch │ Space: toggle │ Enter: add/apply │ Esc: cancel")
-        .style(Style::default().fg(Color::DarkGray))
-        .alignment(Alignment::Center);
-    f.render_widget(hint, chunks[5]);
+    render_filter_popup(f, &config);
 }
 
-/// Draw issue filters popup
+/// Draw issue filters popup using the FilterPopup widget
 fn draw_issue_filters_popup(
     f: &mut Frame,
     status_filter: &HashSet<IssueStatus>,
@@ -2189,111 +1926,23 @@ fn draw_issue_filters_popup(
     author_input: &str,
     author_suggestions: &[String],
 ) {
-    let area = centered_rect(50, 60, f.area());
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Issue Filters ")
-        .style(Style::default().bg(Color::Black));
-
-    let inner = block.inner(area);
-    f.render_widget(ratatui::widgets::Clear, area);
-    f.render_widget(block, area);
-
-    let chunks = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(4), // Status has only 2 options
-        Constraint::Length(1),
-        Constraint::Length(1), // Author input field
-        Constraint::Min(5),    // Author suggestions/selected
-        Constraint::Length(1),
-    ])
-    .split(inner);
-
-    // Status section header
-    let status_header_style = if *focus == IssueFilterFocus::Status {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let status_header = Paragraph::new("Status:")
-        .style(status_header_style);
-    f.render_widget(status_header, chunks[0]);
-
-    // Status options
-    let status_items: Vec<ListItem> = IssueStatus::all()
+    let status_options: Vec<FilterOption> = IssueStatus::all()
         .iter()
-        .enumerate()
-        .map(|(i, status)| {
-            let checked = if status_filter.contains(status) { "[x]" } else { "[ ]" };
-            let style = if *focus == IssueFilterFocus::Status && i == selected_status {
-                Style::default().bg(Color::DarkGray)
-            } else {
-                Style::default()
-            };
-            ListItem::new(format!("{} {}", checked, status.label())).style(style)
+        .map(|s| FilterOption {
+            label: s.label().to_string(),
+            checked: status_filter.contains(s),
         })
         .collect();
 
-    let status_list = List::new(status_items);
-    f.render_widget(status_list, chunks[1]);
-
-    // Author section header
-    let author_header_style = if *focus == IssueFilterFocus::Author {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let author_header = Paragraph::new("Author:")
-        .style(author_header_style);
-    f.render_widget(author_header, chunks[2]);
-
-    // Author input field
-    let input_style = if *focus == IssueFilterFocus::Author {
-        Style::default().fg(Color::White)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let input_text = if author_input.is_empty() && *focus == IssueFilterFocus::Author {
-        "Type to search or add author...".to_string()
-    } else if author_input.is_empty() {
-        "".to_string()
-    } else {
-        format!("@{}_", author_input)
-    };
-    let input_paragraph = Paragraph::new(input_text)
-        .style(if author_input.is_empty() && *focus == IssueFilterFocus::Author {
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)
-        } else {
-            input_style
-        });
-    f.render_widget(input_paragraph, chunks[3]);
-
-    // Author list: always show all available authors with checkmarks
-    let author_items: Vec<ListItem> = if author_suggestions.is_empty() {
-        vec![ListItem::new("No authors available").style(Style::default().fg(Color::DarkGray))]
-    } else {
-        author_suggestions
-            .iter()
-            .enumerate()
-            .map(|(i, author)| {
-                let checked = if author_filter.contains(author) { "[x]" } else { "[ ]" };
-                let style = if *focus == IssueFilterFocus::Author && i == selected_author {
-                    Style::default().bg(Color::DarkGray)
-                } else {
-                    Style::default()
-                };
-                ListItem::new(format!("{} @{}", checked, author)).style(style)
-            })
-            .collect()
+    let filter_focus = match focus {
+        IssueFilterFocus::Status => FilterFocus::Status,
+        IssueFilterFocus::Author => FilterFocus::Author,
     };
 
-    let author_list = List::new(author_items);
-    f.render_widget(author_list, chunks[4]);
+    let config = FilterPopupConfig::new("Issue Filters", author_suggestions, author_filter, author_input)
+        .status_options(status_options)
+        .focus(filter_focus, selected_status, selected_author)
+        .status_height(4); // Issues have only 2 status options
 
-    // Hint
-    let hint = Paragraph::new("Tab: switch │ Space: toggle │ Enter: add/apply │ Esc: cancel")
-        .style(Style::default().fg(Color::DarkGray))
-        .alignment(Alignment::Center);
-    f.render_widget(hint, chunks[5]);
+    render_filter_popup(f, &config);
 }
