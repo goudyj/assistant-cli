@@ -175,8 +175,8 @@ impl Shortcut {
             Self::AssignUser => "Assign user",
             Self::DispatchAgent => "Dispatch agent",
             Self::StartAgent => "Start agent",
-            Self::OpenTmux => "Open tmux session",
-            Self::OpenAnyTmux => "Open any tmux session",
+            Self::OpenTmux => "Open session",
+            Self::OpenAnyTmux => "Open any session",
             Self::ViewLogs => "View agent logs",
             Self::CreatePR => "Create pull request",
             Self::KillAgent => "Kill agent",
@@ -202,7 +202,7 @@ impl Shortcut {
             Self::StartAgent => "agent",
             Self::OpenIDE => "ide",
             Self::CreatePR => "pr",
-            Self::OpenTmux => "tmux",
+            Self::OpenTmux => "term",
             Self::Refresh => "refresh",
             Self::OpenCommandPalette => "cmd",
             Self::OpenHelp => "help",
@@ -262,7 +262,7 @@ impl Shortcut {
             | Self::OpenAnyTmux
             | Self::ExitTerminal
             | Self::PrevSession
-            | Self::NextSession => CommandCategory::Tmux,
+            | Self::NextSession => CommandCategory::Terminal,
 
             Self::SwitchToPRs
             | Self::SwitchToIssues
@@ -371,7 +371,7 @@ impl Shortcut {
 
             // Embedded terminal
             Self::ExitTerminal | Self::PrevSession | Self::NextSession => {
-                &[CommandContext::EmbeddedTmux]
+                &[CommandContext::EmbeddedPty]
             }
         }
     }

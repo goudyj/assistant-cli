@@ -165,12 +165,12 @@ pub fn draw_ui(f: &mut Frame, browser: &mut IssueBrowser) {
         } => {
             draw_agent_logs(f, session_id, content, *scroll);
         }
-        TuiView::EmbeddedTmux {
+        TuiView::EmbeddedPty {
             available_sessions,
             current_index,
             ..
         } => {
-            draw_embedded_tmux(f, browser, available_sessions, *current_index);
+            draw_embedded_pty(f, browser, available_sessions, *current_index);
         }
         TuiView::ProjectSelect { projects, selected } => {
             draw_project_select_inline(f, projects, *selected);
@@ -652,8 +652,8 @@ pub fn draw_agent_logs(f: &mut Frame, session_id: &str, content: &str, scroll: u
     f.render_widget(paragraph, f.area());
 }
 
-/// Draw embedded tmux terminal view
-pub fn draw_embedded_tmux(
+/// Draw embedded PTY terminal view
+pub fn draw_embedded_pty(
     f: &mut Frame,
     browser: &IssueBrowser,
     available_sessions: &[String],
@@ -662,7 +662,7 @@ pub fn draw_embedded_tmux(
     let area = f.area();
 
     let header_text = if available_sessions.is_empty() {
-        " No tmux session │ ESC ESC to exit ".to_string()
+        " No session │ ESC ESC to exit ".to_string()
     } else {
         let session_name = &available_sessions[current_index];
         format!(
@@ -1136,7 +1136,7 @@ pub fn draw_worktree_list(
             let is_selected = idx == selected;
 
             // Status indicators
-            let status_icon = if wt.has_tmux {
+            let status_icon = if wt.has_pty {
                 Span::styled("▶ ", Style::default().fg(Color::Yellow))
             } else if wt.has_session {
                 Span::styled("● ", Style::default().fg(Color::Green))
@@ -1149,7 +1149,7 @@ pub fn draw_worktree_list(
                 .map(|n| format!("#{:<5}", n))
                 .unwrap_or_else(|| "     ".to_string());
 
-            let has_agent = wt.has_session || wt.has_tmux;
+            let has_agent = wt.has_session || wt.has_pty;
             let name_style = if is_selected {
                 Style::default()
                     .fg(Color::White)

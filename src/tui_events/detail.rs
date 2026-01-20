@@ -84,10 +84,10 @@ pub async fn handle_detail_key(browser: &mut IssueBrowser, key: KeyCode, issue: 
         }
         KeyCode::Char('d') => {
             if let Some(project) = browser.project_name.clone() {
-                let tmux_name = crate::agents::tmux_session_name(&project, issue.number);
-                if crate::agents::is_tmux_session_running(&tmux_name) {
+                let session_name = crate::agents::pty_session_name(&project, issue.number);
+                if crate::agents::is_pty_session_running(&session_name) {
                     browser.status_message = Some(format!(
-                        "Session already running for #{}. Use 't' to open tmux or 'K' to kill it.",
+                        "Session already running for #{}. Use 't' to open terminal or 'K' to kill it.",
                         issue.number
                     ));
                 } else {
@@ -371,10 +371,10 @@ pub async fn handle_confirm_dispatch_key(
             if let (Some(project), Some(local_path)) =
                 (&browser.project_name, &browser.local_path)
             {
-                let tmux_name = crate::agents::tmux_session_name(project, number);
-                if crate::agents::is_tmux_session_running(&tmux_name) {
+                let session_name = crate::agents::pty_session_name(project, number);
+                if crate::agents::is_pty_session_running(&session_name) {
                     browser.status_message = Some(format!(
-                        "Session already running for #{}. Use 't' to open tmux or 'K' to kill it.",
+                        "Session already running for #{}. Use 't' to open terminal or 'K' to kill it.",
                         number
                     ));
                 } else {

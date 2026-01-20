@@ -12,7 +12,7 @@
 //! - `filters`: Filter dialogs
 //! - `agents`: Agent logs and selection
 //! - `project`: Project selection
-//! - `embedded`: Embedded tmux terminal
+//! - `embedded`: Embedded PTY terminal
 //! - `help`: Help view
 //! - `common`: Shared utilities
 
@@ -326,7 +326,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
             worktree::handle_confirm_delete_worktree_key(browser, key, &worktree, return_index);
         }
 
-        TuiView::EmbeddedTmux {
+        TuiView::EmbeddedPty {
             available_sessions,
             current_index,
             return_to_worktrees,
@@ -334,7 +334,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
             let mut available_sessions = available_sessions.clone();
             let mut current_index = *current_index;
             let return_to_worktrees = *return_to_worktrees;
-            embedded::handle_embedded_tmux_key(
+            embedded::handle_embedded_pty_key(
                 browser,
                 key,
                 modifiers,
@@ -342,7 +342,7 @@ pub async fn handle_key_event(browser: &mut IssueBrowser, key: KeyCode, modifier
                 &mut current_index,
                 return_to_worktrees,
             );
-            if let TuiView::EmbeddedTmux {
+            if let TuiView::EmbeddedPty {
                 available_sessions: ref mut a,
                 current_index: ref mut c,
                 ..

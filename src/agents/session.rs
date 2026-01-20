@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 
+use super::pty_manager::pty_manager;
 use super::{cache_dir, sessions_file};
 use crate::config::CodingAgentType;
 
@@ -95,7 +95,7 @@ impl AgentSession {
     }
 
     /// Check if the session is still running (based on stored status only)
-    /// Note: Awaiting is also considered "running" since tmux session is active
+    /// Note: Awaiting is also considered "running" since PTY session is active
     pub fn is_running(&self) -> bool {
         matches!(self.status, AgentStatus::Running | AgentStatus::Awaiting)
     }
@@ -105,8 +105,8 @@ impl AgentSession {
         matches!(self.status, AgentStatus::Awaiting)
     }
 
-    /// Get the tmux session name for this session
-    pub fn tmux_session_name(&self) -> String {
+    /// Get the PTY session name for this session
+    pub fn pty_session_name(&self) -> String {
         format!("{}-issue-{}", self.project, self.issue_number)
     }
 
@@ -149,21 +149,16 @@ impl SessionManager {
         Self { sessions }
     }
 
-    /// Sync session statuses with actual tmux state.
-    /// Marks sessions as completed if their tmux session no longer exists.
-    pub fn sync_with_tmux(&mut self) -> bool {
+    /// Sync session statuses with actual PTY state.
+    /// Marks sessions as completed if their PTY session no longer exists.
+    pub fn sync_with_pty(&mut self) -> bool {
         let mut changed = false;
         for session in &mut self.sessions {
             if session.is_running() {
-                let tmux_name = session.tmux_session_name();
-                let tmux_exists = Command::new("tmux")
-                    .args(["has-session", "-t", &tmux_name])
-                    .stderr(Stdio::null())
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false);
+                let pty_name = session.pty_session_name();
+                let pty_exists = pty_manager().is_session_running(&pty_name);
 
-                if !tmux_exists {
+                if !pty_exists {
                     session.status = AgentStatus::Completed { exit_code: 0 };
                     changed = true;
                 }

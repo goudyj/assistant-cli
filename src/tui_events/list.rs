@@ -88,10 +88,10 @@ pub async fn handle_list_key(browser: &mut IssueBrowser, key: KeyCode) {
             handle_dispatch(browser).await;
         }
         KeyCode::Char('t') => {
-            handle_open_tmux(browser);
+            handle_open_pty(browser);
         }
         KeyCode::Char('T') => {
-            handle_open_any_tmux(browser);
+            handle_open_any_pty(browser);
         }
         KeyCode::Char('l') => {
             if let Some(issue) = browser.selected_issue() {
@@ -177,10 +177,10 @@ async fn handle_dispatch(browser: &mut IssueBrowser) {
             let issue_number = issue.number;
             let project_name = browser.project_name.clone().unwrap_or_default();
 
-            let tmux_name = crate::agents::tmux_session_name(&project_name, issue_number);
-            if crate::agents::is_tmux_session_running(&tmux_name) {
+            let session_name = crate::agents::pty_session_name(&project_name, issue_number);
+            if crate::agents::is_pty_session_running(&session_name) {
                 browser.status_message = Some(format!(
-                    "Session already running for #{}. Use 't' to open tmux or 'K' to kill it.",
+                    "Session already running for #{}. Use 't' to open terminal or 'K' to kill it.",
                     issue_number
                 ));
             } else if let Ok(detail) = browser.github.get_issue(issue_number).await {
@@ -200,8 +200,8 @@ async fn handle_dispatch(browser: &mut IssueBrowser) {
 
         let agent = crate::agents::get_agent(&browser.coding_agent);
         for issue_number in browser.selected_issues.iter() {
-            let tmux_name = crate::agents::tmux_session_name(&project_name, *issue_number);
-            if crate::agents::is_tmux_session_running(&tmux_name) {
+            let session_name = crate::agents::pty_session_name(&project_name, *issue_number);
+            if crate::agents::is_pty_session_running(&session_name) {
                 skipped += 1;
                 continue;
             }
@@ -237,27 +237,27 @@ async fn handle_dispatch(browser: &mut IssueBrowser) {
     }
 }
 
-fn handle_open_tmux(browser: &mut IssueBrowser) {
+fn handle_open_pty(browser: &mut IssueBrowser) {
     if let Some(issue) = browser.selected_issue() {
         let issue_number = issue.number;
         if let Some(project) = browser.project_name.clone() {
-            let tmux_name = crate::agents::tmux_session_name(&project, issue_number);
-            if crate::agents::is_tmux_session_running(&tmux_name) {
-                let all_sessions = crate::agents::list_tmux_sessions();
+            let session_name = crate::agents::pty_session_name(&project, issue_number);
+            if crate::agents::is_pty_session_running(&session_name) {
+                let all_sessions = crate::agents::list_pty_sessions();
                 let current_idx = all_sessions
                     .iter()
-                    .position(|s| s == &tmux_name)
+                    .position(|s| s == &session_name)
                     .unwrap_or(0);
 
                 let area = crossterm::terminal::size().unwrap_or((80, 24));
-                match crate::embedded_term::EmbeddedTerminal::new(
-                    &tmux_name,
+                match crate::embedded_term::EmbeddedTerminal::attach(
+                    &session_name,
                     area.1.saturating_sub(1),
                     area.0,
                 ) {
                     Ok(term) => {
                         browser.embedded_term = Some(term);
-                        browser.view = TuiView::EmbeddedTmux {
+                        browser.view = TuiView::EmbeddedPty {
                             available_sessions: all_sessions,
                             current_index: current_idx,
                             return_to_worktrees: false,
@@ -276,18 +276,18 @@ fn handle_open_tmux(browser: &mut IssueBrowser) {
     }
 }
 
-fn handle_open_any_tmux(browser: &mut IssueBrowser) {
-    let all_sessions = crate::agents::list_tmux_sessions();
+fn handle_open_any_pty(browser: &mut IssueBrowser) {
+    let all_sessions = crate::agents::list_pty_sessions();
     if !all_sessions.is_empty() {
         let area = crossterm::terminal::size().unwrap_or((80, 24));
-        match crate::embedded_term::EmbeddedTerminal::new(
+        match crate::embedded_term::EmbeddedTerminal::attach(
             &all_sessions[0],
             area.1.saturating_sub(1),
             area.0,
         ) {
             Ok(term) => {
                 browser.embedded_term = Some(term);
-                browser.view = TuiView::EmbeddedTmux {
+                browser.view = TuiView::EmbeddedPty {
                     available_sessions: all_sessions,
                     current_index: 0,
                     return_to_worktrees: false,
@@ -298,7 +298,7 @@ fn handle_open_any_tmux(browser: &mut IssueBrowser) {
             }
         }
     } else {
-        browser.status_message = Some("No tmux sessions available".to_string());
+        browser.status_message = Some("No sessions available".to_string());
     }
 }
 

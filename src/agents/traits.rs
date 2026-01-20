@@ -15,7 +15,7 @@ pub trait CodingAgent: Send + Sync {
     /// Returns the CLI command to invoke this agent (e.g., "claude", "opencode")
     fn cli_command(&self) -> &'static str;
 
-    /// Check if the agent is idle (waiting for user input) based on tmux pane content.
+    /// Check if the agent is idle (waiting for user input) based on PTY output.
     fn is_idle(&self, pane_content: &str) -> bool;
 
     /// Build the shell command to launch the agent with a prompt.

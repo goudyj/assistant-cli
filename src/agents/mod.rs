@@ -2,16 +2,20 @@
 
 mod claude;
 mod opencode;
+pub mod pty_manager;
+pub mod pty_session;
 mod session;
 mod traits;
 mod worktree;
 
 pub use claude::{
-    attach_tmux_command, create_pr, dispatch_to_agent, dispatch_to_claude, is_tmux_session_running,
-    kill_agent, kill_tmux_session, launch_agent_interactive, list_all_tmux_sessions,
-    list_tmux_sessions, resume_monitoring_for_running_sessions, tmux_session_name, ClaudeCodeAgent,
+    create_pr, dispatch_to_agent, dispatch_to_claude, get_pty_session, is_pty_session_running,
+    kill_agent, launch_agent_interactive, launch_agent_pty, list_all_pty_sessions,
+    list_pty_sessions, pty_session_name, resume_monitoring_for_running_sessions, ClaudeCodeAgent,
 };
 pub use opencode::OpencodeAgent;
+pub use pty_manager::{pty_manager, PtyManager};
+pub use pty_session::PtySession;
 pub use session::{AgentSession, AgentStats, AgentStatus, SessionManager};
 pub use traits::{get_agent, CodingAgent};
 pub use worktree::{

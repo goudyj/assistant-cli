@@ -234,7 +234,7 @@ pub async fn handle_dispatch_pr_review_key(
                             browser.refresh_sessions(&project_name);
 
                             // Open embedded terminal to show the agent
-                            let sessions = crate::agents::list_tmux_sessions();
+                            let sessions = crate::agents::list_pty_sessions();
                             let mut all_sessions = sessions;
                             if !all_sessions.contains(&session_name) {
                                 all_sessions.push(session_name.clone());
@@ -244,14 +244,14 @@ pub async fn handle_dispatch_pr_review_key(
                                 .position(|s| s == &session_name)
                                 .unwrap_or(0);
                             let area = crossterm::terminal::size().unwrap_or((80, 24));
-                            match crate::embedded_term::EmbeddedTerminal::new(
+                            match crate::embedded_term::EmbeddedTerminal::attach(
                                 &session_name,
                                 area.1.saturating_sub(1),
                                 area.0,
                             ) {
                                 Ok(term) => {
                                     browser.embedded_term = Some(term);
-                                    browser.view = TuiView::EmbeddedTmux {
+                                    browser.view = TuiView::EmbeddedPty {
                                         available_sessions: all_sessions,
                                         current_index,
                                         return_to_worktrees: false,
