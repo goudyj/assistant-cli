@@ -101,17 +101,6 @@ impl Widget for Popup<'_> {
 }
 
 /// Helper to render a popup and return its inner area for content.
-///
-/// # Example
-/// ```
-/// use assistant::widgets::render_popup;
-/// use ratatui::Frame;
-///
-/// fn draw(f: &mut Frame) {
-///     let inner = render_popup(f, " Title ", 50, 30);
-///     // Now render content in `inner`
-/// }
-/// ```
 #[allow(dead_code)]
 pub fn render_popup(
     f: &mut ratatui::Frame,
