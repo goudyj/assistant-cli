@@ -1016,8 +1016,38 @@ pub async fn run_issue_browser_with_pagination(
                         }
                     } else {
                         match mouse_event.kind {
-                            MouseEventKind::ScrollUp => browser.previous(),
-                            MouseEventKind::ScrollDown => browser.next(),
+                            MouseEventKind::ScrollUp => {
+                                match &mut browser.view {
+                                    TuiView::List => browser.previous(),
+                                    TuiView::PullRequestList => browser.pr_previous(),
+                                    TuiView::Detail(_) | TuiView::PullRequestDetail(_) => {
+                                        browser.scroll_offset = browser.scroll_offset.saturating_sub(1);
+                                    }
+                                    TuiView::PreviewIssue { scroll, .. } => {
+                                        *scroll = scroll.saturating_sub(1);
+                                    }
+                                    TuiView::AgentLogs { scroll, .. } => {
+                                        *scroll = scroll.saturating_sub(1);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            MouseEventKind::ScrollDown => {
+                                match &mut browser.view {
+                                    TuiView::List => browser.next(),
+                                    TuiView::PullRequestList => browser.pr_next(),
+                                    TuiView::Detail(_) | TuiView::PullRequestDetail(_) => {
+                                        browser.scroll_offset = browser.scroll_offset.saturating_add(1);
+                                    }
+                                    TuiView::PreviewIssue { scroll, .. } => {
+                                        *scroll = scroll.saturating_add(1);
+                                    }
+                                    TuiView::AgentLogs { scroll, .. } => {
+                                        *scroll = scroll.saturating_add(1);
+                                    }
+                                    _ => {}
+                                }
+                            }
                             _ => {}
                         }
                     }
