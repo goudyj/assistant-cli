@@ -53,7 +53,7 @@ pub async fn handle_pr_list_key(browser: &mut IssueBrowser, key: KeyCode) {
                     Some(format!("Creating worktree for branch: {}", branch));
                 // Reuse existing worktree creation logic
                 match browser.create_worktree_for_branch(&branch) {
-                    Ok((path, _)) => {
+                    Ok((path, _, _)) => {
                         browser.status_message =
                             Some(format!("Worktree created at: {}", path.display()));
                     }
@@ -205,7 +205,7 @@ pub async fn handle_dispatch_pr_review_key(
             // Create worktree for PR branch
             let branch = pr.head_ref.clone();
             match browser.create_worktree_for_branch(&branch) {
-                Ok((worktree_path, _)) => {
+                Ok((worktree_path, _, worktree_name)) => {
                     // Build review prompt
                     let mut review_prompt =
                         format!("Review this PR #{}: \"{}\"\n\n", pr.number, pr.title);
@@ -227,25 +227,25 @@ pub async fn handle_dispatch_pr_review_key(
 
                     // Launch agent
                     let project_name = browser.current_project.clone();
-                    match browser.dispatch_agent_for_worktree(&worktree_path, &review_prompt) {
-                        Ok(session_name) => {
+                    match browser.dispatch_pr_review_session(&worktree_path, &worktree_name,&review_prompt) {
+                        Ok(()) => {
                             browser.status_message =
-                                Some(format!("Started PR review session: {}", session_name));
+                                Some(format!("Started PR review session: {}", &worktree_name));
                             browser.refresh_sessions(&project_name);
 
                             // Open embedded terminal to show the agent
                             let sessions = crate::agents::list_pty_sessions();
                             let mut all_sessions = sessions;
-                            if !all_sessions.contains(&session_name) {
-                                all_sessions.push(session_name.clone());
+                            if !all_sessions.contains(&worktree_name) {
+                                all_sessions.push(worktree_name.clone());
                             }
                             let current_index = all_sessions
                                 .iter()
-                                .position(|s| s == &session_name)
+                                .position(|s| s == &worktree_name)
                                 .unwrap_or(0);
                             let area = crossterm::terminal::size().unwrap_or((80, 24));
                             match crate::embedded_term::EmbeddedTerminal::attach(
-                                &session_name,
+                                &worktree_name,
                                 area.1.saturating_sub(1),
                                 area.0,
                             ) {

@@ -172,11 +172,12 @@ pub fn create_worktree_with_branch(
     project: &str,
     branch_name: &str,
     base_branch: Option<&str>,
-) -> Result<(PathBuf, String), WorktreeError> {
+) -> Result<(PathBuf, String, String), WorktreeError> {
     // Sanitize branch name for directory (replace / with -)
     let sanitized_name = branch_name.replace('/', "-");
     let worktree_name = format!("{}-{}", project, sanitized_name);
-    create_worktree_impl(local_path, branch_name, &worktree_name, base_branch)
+    let (worktree_path, branch_name) = create_worktree_impl(local_path, branch_name, &worktree_name, base_branch)?;
+    Ok((worktree_path, branch_name, worktree_name))
 }
 
 /// Shared implementation for creating worktrees.

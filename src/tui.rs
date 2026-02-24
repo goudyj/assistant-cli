@@ -831,7 +831,7 @@ impl IssueBrowser {
     pub fn create_worktree_for_branch(
         &self,
         branch: &str,
-    ) -> Result<(std::path::PathBuf, String), String> {
+    ) -> Result<(std::path::PathBuf, String, String), String> {
         let local_path = self.local_path.as_ref().ok_or("No local_path configured")?;
         let project_name = self.project_name.as_deref().ok_or("No project configured")?;
         let base_branch = self.base_branch.as_deref();
@@ -841,12 +841,12 @@ impl IssueBrowser {
     }
 
     /// Dispatch agent for a worktree with instructions
-    pub fn dispatch_agent_for_worktree(
+    pub fn dispatch_pr_review_session(
         &self,
         worktree_path: &std::path::Path,
+        session_name: &str,
         instructions: &str,
-    ) -> Result<String, String> {
-        let session_name = format!("pr-review-{}", uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("unknown"));
+    ) -> Result<(), String> {
 
         // Launch agent interactively with PTY
         crate::agents::launch_agent_interactive(
@@ -857,7 +857,7 @@ impl IssueBrowser {
         )
         .map_err(|e| e.to_string())?;
 
-        Ok(session_name)
+        Ok(())
     }
 }
 

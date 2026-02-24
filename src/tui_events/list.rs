@@ -243,7 +243,7 @@ fn handle_open_pty(browser: &mut IssueBrowser) {
         if let Some(project) = browser.project_name.clone() {
             let session_name = crate::agents::pty_session_name(&project, issue_number);
             if crate::agents::is_pty_session_running(&session_name) {
-                let all_sessions = crate::agents::list_pty_sessions();
+                let all_sessions = crate::agents::list_all_pty_sessions();
                 let current_idx = all_sessions
                     .iter()
                     .position(|s| s == &session_name)

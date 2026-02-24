@@ -208,11 +208,7 @@ pub fn handle_worktree_list_key(
     }
 }
 
-pub fn handle_create_worktree_key(
-    browser: &mut IssueBrowser,
-    key: KeyCode,
-    input: &mut String,
-) {
+pub fn handle_create_worktree_key(browser: &mut IssueBrowser, key: KeyCode, input: &mut String) {
     match key {
         KeyCode::Esc => {
             // Return to worktree list
@@ -238,7 +234,7 @@ pub fn handle_create_worktree_key(
                         &branch_name,
                         browser.base_branch.as_deref(),
                     ) {
-                        Ok((worktree_path, branch)) => {
+                        Ok((worktree_path, branch, _)) => {
                             browser.view = TuiView::PostWorktreeCreate {
                                 worktree_path,
                                 branch_name: branch,
